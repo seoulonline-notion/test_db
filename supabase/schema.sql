@@ -179,7 +179,21 @@ as $$
 $$;
 
 
--- 2-4. 이름 마스킹  (강현욱 → 강*욱, 김철 → 김*, 남궁민수 → 남**수)
+-- 2-4. 학교 이름 정규화 (명단과 학생 입력을 느슨하게 비교하기 위함)
+--   띄어쓰기 제거 + 소문자 + 끝의 "등학교"/"학교" 제거
+--   예) "경인고등학교", "경인 고등학교", "경인고" → 모두 "경인고"
+create or replace function public.norm_school(p text)
+returns text
+language sql
+immutable
+as $$
+  select regexp_replace(
+           lower(regexp_replace(coalesce(p, ''), '\s+', '', 'g')),
+           '(등학교|학교)$', '');
+$$;
+
+
+-- 2-5. 이름 마스킹  (강현욱 → 강*욱, 김철 → 김*, 남궁민수 → 남**수)
 create or replace function public.mask_name(p_name text)
 returns text
 language sql
@@ -200,7 +214,7 @@ $$;
 -- 3. 학생용 RPC 함수  (프런트엔드에서 supabase.rpc('함수명', {...}) 로 호출)
 -- ---------------------------------------------------------------------
 
--- 3-1. 명단에 있는 학교 이름 목록 (로그인 화면 드롭다운용)
+-- 3-1. 명단에 있는 학교 이름 목록 (현재 학생 화면은 직접 입력 방식이라 쓰지 않음. 필요 시 자동완성용)
 --   학교 이름만 공개되며, 학생 이름·학번은 절대 노출되지 않습니다.
 create or replace function public.list_schools()
 returns table (school text)
@@ -250,13 +264,16 @@ begin
   end if;
 
   -- 참가 명단 확인 (학교 + 학번 + 이름이 모두 일치해야 통과)
-  if not exists (
-    select 1
-    from public.allowed_students s
-    where s.school = v_school
-      and s.student_no = v_no
-      and regexp_replace(s.name, '\s+', '', 'g') = v_name
-  ) then
+  --   학교는 norm_school() 로 느슨하게 비교: "경인고" 라고 써도 명단의 "경인고등학교"와 맞음
+  --   통과하면 프로필에는 학생이 쓴 글자가 아니라 명단에 적힌 학교 이름을 저장
+  select s.school into v_school
+  from public.allowed_students s
+  where public.norm_school(s.school) = public.norm_school(v_school)
+    and s.student_no = v_no
+    and regexp_replace(s.name, '\s+', '', 'g') = v_name
+  limit 1;
+
+  if v_school is null then
     raise exception '참가 명단에서 찾을 수 없습니다. 학교·학번·이름을 다시 확인해 주세요.';
   end if;
 

@@ -125,7 +125,6 @@
     sort: 'random',         // random | popular | newest
     seed: 0,                // 랜덤 정렬 시드
     currentId: null,        // 상세 모달에 열린 작품 id
-    schoolsLoaded: false,   // 학교 드롭다운을 채웠는지
     busyLikes: new Set(),   // 처리 중인 하트 (중복 클릭 방지)
   };
 
@@ -497,24 +496,6 @@
   // -------------------------------------------------------------------
   // 7. 로그인 / 로그아웃
   // -------------------------------------------------------------------
-  async function loadSchools() {
-    if (state.schoolsLoaded) return;
-    const { data, error } = await sb.rpc('list_schools');
-    const select = $('school');
-    if (error) { console.error('학교 목록 실패', error); return; }
-
-    (data || []).forEach((row) => {
-      const opt = document.createElement('option');
-      opt.value = row.school;
-      opt.textContent = row.school;
-      select.appendChild(opt);
-    });
-    state.schoolsLoaded = true;
-
-    // 학교가 하나뿐이면 자동 선택
-    if (data && data.length === 1) select.value = data[0].school;
-  }
-
   async function onLogin(e) {
     e.preventDefault();
     const errEl = $('loginError');
@@ -525,7 +506,7 @@
     const name = $('studentName').value.trim();
     const consent = $('consent').checked;
 
-    if (!school) { errEl.textContent = '학교를 선택해 주세요.'; return; }
+    if (!school) { errEl.textContent = '학교 이름을 입력해 주세요.'; return; }
     if (!studentNo) { errEl.textContent = '학번을 입력해 주세요.'; return; }
     if (!name) { errEl.textContent = '이름을 입력해 주세요.'; return; }
     if (!consent) { errEl.textContent = '개인정보 수집·이용에 동의해야 참여할 수 있어요.'; return; }
@@ -597,7 +578,6 @@
     $(id).classList.remove('hidden');
     document.body.classList.add('modal-open');
     if (id === 'loginModal') {
-      loadSchools();
       setTimeout(() => $('school').focus(), 50);
     }
   }
