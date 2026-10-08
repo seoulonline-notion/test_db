@@ -13,8 +13,8 @@
 // =====================================================================
 
 window.APP_CONFIG = {
-  SUPABASE_URL: 'https://sexleyqiilcoonpywthz.supabase.co/rest/v1/',
-  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNleGxleXFpaWxjb29ucHl3dGh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzOTY2ODMsImV4cCI6MjEwNjk3MjY4M30.vpGqeHLQEAwWuoF7xFTRmldQG4UsAOSCh2zgmj0wj60',
+  SUPABASE_URL: 'https://YOUR-PROJECT-ID.supabase.co',
+  SUPABASE_ANON_KEY: 'YOUR-ANON-PUBLIC-KEY',
 
   // 작품 이미지가 들어 있는 Storage 버킷 이름 (schema.sql 과 같아야 함)
   STORAGE_BUCKET: 'artworks',
