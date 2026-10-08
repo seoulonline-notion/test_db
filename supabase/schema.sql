@@ -9,8 +9,8 @@
 --  전체 구조 한눈에 보기
 --    settings          : 투표 시작/마감 스위치 등 사이트 설정(행 1개만 존재)
 --    admins            : 교사(관리자) 이메일 목록
---    allowed_students  : 교사가 CSV로 올리는 "참가 학생 명단" (학생은 절대 조회 불가)
---    student_profiles  : 실제로 로그인한 학생. 익명 로그인 계정(auth.users)과 연결
+--    secrets           : 관리자 가입 코드 (클라이언트는 읽을 수 없음, 함수 안에서만 사용)
+--    student_profiles  : 로그인한 학생(학교·학번·이름). 익명 로그인 계정(auth.users)과 연결
 --    artworks          : 공모전 작품(이미지 경로 + 제목 + 설명)
 --    likes             : 좋아요. (작품, 학생) 조합 1개만 허용 → 1인 1회
 --    comments          : 댓글. 작성자명은 저장 시점에 마스킹(강*욱)
@@ -58,21 +58,28 @@ create table if not exists public.admins (
 );
 
 
--- 1-3. 참가 학생 명단 (교사가 CSV로 업로드)
---   학생 로그인 시 (학교, 학번, 이름)이 이 명단에 있어야만 통과합니다.
-create table if not exists public.allowed_students (
-  id          uuid primary key default gen_random_uuid(),
-  school      text not null,          -- 예: 한빛중학교
-  student_no  text not null,          -- 예: 10203  (문자로 저장: 앞자리 0 보존)
-  name        text not null,          -- 예: 강현욱
-  created_at  timestamptz not null default now(),
-  unique (school, student_no)         -- 같은 학교에 같은 학번은 1명
+-- 1-3. 비밀 값 저장소 (관리자 가입 코드)
+--   이 표에는 어떤 RLS 정책도 두지 않으므로 클라이언트에서는 절대 읽을 수 없고,
+--   SECURITY DEFINER 함수(check_admin_code, register_admin) 안에서만 읽습니다.
+create table if not exists public.secrets (
+  key    text primary key,
+  value  text not null
 );
+-- 관리자 가입 코드 기본값. 바꾸려면 SQL Editor 에서:
+--   update public.secrets set value = '새코드' where key = 'admin_signup_code';
+-- (이미 값이 있으면 이 파일을 다시 실행해도 덮어쓰지 않습니다)
+insert into public.secrets (key, value) values ('admin_signup_code', 'sonline')
+on conflict (key) do nothing;
+
+-- 예전 버전에서 쓰던 "참가 명단" 표와 함수는 더 이상 사용하지 않으므로 제거
+drop function if exists public.list_schools();
+drop table if exists public.allowed_students;
 
 
 -- 1-4. 로그인한 학생 프로필
 --   익명 로그인으로 생긴 auth.users 계정(user_id)과 학생 정보를 연결합니다.
---   (school, student_no) unique → 같은 학생이 여러 계정을 만들어 중복 투표하는 것을 DB에서 차단
+--   (학교, 학번) 조합이 유일해야 함 → 같은 학생이 여러 계정을 만들어 중복 투표하는 것을 DB에서 차단
+--   (학교 이름은 norm_school() 로 정규화해 비교: 유일 인덱스는 2-4 아래에서 만듦)
 create table if not exists public.student_profiles (
   id            uuid primary key default gen_random_uuid(),
   user_id       uuid unique references auth.users (id) on delete set null, -- 현재 연결된 로그인 계정
@@ -81,10 +88,11 @@ create table if not exists public.student_profiles (
   name          text not null,
   consented_at  timestamptz,                         -- 개인정보 수집·이용 동의 시각
   created_at    timestamptz not null default now(),
-  last_login_at timestamptz not null default now(),
-  unique (school, student_no)
+  last_login_at timestamptz not null default now()
 );
 create index if not exists student_profiles_user_id_idx on public.student_profiles (user_id);
+-- 예전 버전의 단순 unique(school, student_no) 제약은 제거 (아래 정규화 인덱스로 대체)
+alter table public.student_profiles drop constraint if exists student_profiles_school_student_no_key;
 
 
 -- 1-5. 작품
@@ -179,7 +187,7 @@ as $$
 $$;
 
 
--- 2-4. 학교 이름 정규화 (명단과 학생 입력을 느슨하게 비교하기 위함)
+-- 2-4. 학교 이름 정규화 (표기가 조금 달라도 같은 학교로 보기 위함)
 --   띄어쓰기 제거 + 소문자 + 끝의 "등학교"/"학교" 제거
 --   예) "경인고등학교", "경인 고등학교", "경인고" → 모두 "경인고"
 create or replace function public.norm_school(p text)
@@ -191,6 +199,10 @@ as $$
            lower(regexp_replace(coalesce(p, ''), '\s+', '', 'g')),
            '(등학교|학교)$', '');
 $$;
+
+-- ★ 중복 투표 차단의 핵심: (정규화한 학교, 학번) 조합은 프로필 1개만 허용
+create unique index if not exists student_profiles_school_no_key
+  on public.student_profiles (public.norm_school(school), student_no);
 
 
 -- 2-5. 이름 마스킹  (강현욱 → 강*욱, 김철 → 김*, 남궁민수 → 남**수)
@@ -214,23 +226,10 @@ $$;
 -- 3. 학생용 RPC 함수  (프런트엔드에서 supabase.rpc('함수명', {...}) 로 호출)
 -- ---------------------------------------------------------------------
 
--- 3-1. 명단에 있는 학교 이름 목록 (현재 학생 화면은 직접 입력 방식이라 쓰지 않음. 필요 시 자동완성용)
---   학교 이름만 공개되며, 학생 이름·학번은 절대 노출되지 않습니다.
-create or replace function public.list_schools()
-returns table (school text)
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select distinct s.school
-  from public.allowed_students s
-  order by s.school;
-$$;
-
-
--- 3-2. 학생 로그인(프로필 연결)
---   흐름: 프런트에서 익명 로그인 → 이 함수 호출 → 명단 확인 → 프로필 생성/재연결
+-- 3-1. 학생 로그인(프로필 연결)
+--   흐름: 프런트에서 익명 로그인 → 이 함수 호출 → 프로필 생성/재연결
+--   별도의 참가 명단은 없습니다. 학교·학번·이름을 입력하면 누구나 참여할 수 있고,
+--   같은 (학교, 학번)은 프로필 1개만 만들어지므로 1인 1표가 유지됩니다.
 --   같은 학생이 다른 기기에서 다시 로그인하면 기존 프로필을 새 계정에 재연결하고,
 --   이전 기기의 계정은 프로필이 끊겨 더 이상 투표할 수 없게 됩니다(중복 투표 방지).
 create or replace function public.claim_student(
@@ -263,18 +262,8 @@ begin
     raise exception '학교, 학번, 이름을 모두 입력해 주세요.';
   end if;
 
-  -- 참가 명단 확인 (학교 + 학번 + 이름이 모두 일치해야 통과)
-  --   학교는 norm_school() 로 느슨하게 비교: "경인고" 라고 써도 명단의 "경인고등학교"와 맞음
-  --   통과하면 프로필에는 학생이 쓴 글자가 아니라 명단에 적힌 학교 이름을 저장
-  select s.school into v_school
-  from public.allowed_students s
-  where public.norm_school(s.school) = public.norm_school(v_school)
-    and s.student_no = v_no
-    and regexp_replace(s.name, '\s+', '', 'g') = v_name
-  limit 1;
-
-  if v_school is null then
-    raise exception '참가 명단에서 찾을 수 없습니다. 학교·학번·이름을 다시 확인해 주세요.';
+  if public.norm_school(v_school) = '' then
+    raise exception '학교 이름을 정확히 입력해 주세요.';
   end if;
 
   -- 같은 브라우저 계정이 다른 학생 프로필에 연결돼 있다면 먼저 끊어 둡니다.
@@ -282,15 +271,24 @@ begin
   update public.student_profiles
      set user_id = null
    where user_id = v_uid
-     and not (school = v_school and student_no = v_no);
+     and not (public.norm_school(school) = public.norm_school(v_school) and student_no = v_no);
 
-  -- 프로필 생성, 이미 있으면 현재 계정으로 재연결
+  -- 프로필 생성, 이미 있으면(같은 학교·학번) 현재 계정으로 재연결
+  --   이름이 다르면 재연결하지 않음 → 남의 학번으로 로그인해 표를 가로채는 것을 막음
+  if exists (
+    select 1 from public.student_profiles p
+    where public.norm_school(p.school) = public.norm_school(v_school)
+      and p.student_no = v_no
+      and p.name <> v_name
+  ) then
+    raise exception '같은 학교·학번으로 이미 다른 이름이 등록되어 있습니다. 선생님께 문의해 주세요.';
+  end if;
+
   insert into public.student_profiles
          (user_id, school, student_no, name, consented_at, last_login_at)
   values (v_uid, v_school, v_no, v_name, now(), now())
-  on conflict (school, student_no) do update
+  on conflict ((public.norm_school(school)), student_no) do update
      set user_id       = excluded.user_id,
-         name          = excluded.name,
          consented_at  = coalesce(public.student_profiles.consented_at, now()),
          last_login_at = now()
   returning * into v_profile;
@@ -485,10 +483,10 @@ end;
 $$;
 
 
--- 4-2. 참여 현황 요약 (명단 인원, 로그인 인원, 좋아요/댓글 총수)
-create or replace function public.admin_summary()
+-- 4-2. 참여 현황 요약 (로그인 인원, 좋아요/댓글 총수, 작품 수)
+drop function if exists public.admin_summary();   -- 반환 열이 바뀌어 다시 만듦
+create function public.admin_summary()
 returns table (
-  roster_count   bigint,
   login_count    bigint,
   like_total     bigint,
   comment_total  bigint,
@@ -506,7 +504,6 @@ begin
 
   return query
     select
-      (select count(*) from public.allowed_students),
       (select count(*) from public.student_profiles),
       (select count(*) from public.likes),
       (select count(*) from public.comments),
@@ -515,43 +512,9 @@ end;
 $$;
 
 
--- 4-3. 첫 관리자 등록 (admin.html 로그인 화면의 "첫 관리자 계정 만들기"에서 호출)
---   "로그인 계정이 실제로 있는 관리자"가 아직 한 명도 없을 때만, 지금 로그인한 사용자를
---   관리자로 등록합니다. 관리자가 한 명이라도 생기면 이 함수는 더 이상 아무도 등록하지 않으므로
---   처음 설정이 끝난 뒤에는 안전하게 닫힙니다.
-create or replace function public.bootstrap_admin()
-returns boolean
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_email text := lower(coalesce(auth.jwt() ->> 'email', ''));
-begin
-  -- 이메일 계정(익명 아님)으로 로그인한 사람만
-  if v_email = '' or coalesce((auth.jwt() ->> 'is_anonymous')::boolean, false) then
-    return false;
-  end if;
-
-  -- 이미 관리자면 그대로 true
-  if public.is_admin() then
-    return true;
-  end if;
-
-  -- admins 표의 이메일 중 "이메일 확인까지 끝난" 로그인 계정이 있으면 닫힘
-  if public.has_active_admin() then
-    return false;
-  end if;
-
-  insert into public.admins (email) values (v_email)
-  on conflict (email) do nothing;
-  return true;
-end;
-$$;
-
-
--- 4-4. 활성 관리자(로그인 가능한 관리자)가 한 명이라도 있는가?
-create or replace function public.has_active_admin()
+-- 4-3. 관리자 가입 코드 확인 (admin.html 에서 계정을 만들기 전에 호출)
+--   코드는 secrets 표에만 있고 클라이언트는 읽을 수 없으므로, 맞는지 여부만 돌려줍니다.
+create or replace function public.check_admin_code(p_code text)
 returns boolean
 language sql
 stable
@@ -559,19 +522,18 @@ security definer
 set search_path = public
 as $$
   select exists (
-    select 1
-    from public.admins a
-    join auth.users u on lower(u.email) = lower(a.email)
-    where u.email_confirmed_at is not null
+    select 1 from public.secrets s
+    where s.key = 'admin_signup_code' and s.value = coalesce(p_code, '')
   );
 $$;
 
 
--- 4-5. 첫 관리자 만들기 2단계: 회원가입 직후 호출 (로그인 전이라 anon 으로 호출됨)
---   Supabase 의 "Confirm email" 설정이 켜져 있으면 가입 후 메일 확인 전까지 로그인이 안 됩니다.
---   이 함수가 그 이메일을 "확인됨"으로 바꾸고 관리자로 등록해, 바로 로그인할 수 있게 합니다.
---   활성 관리자가 이미 있으면 아무것도 하지 않으므로, 처음 설정이 끝난 뒤에는 닫힙니다.
-create or replace function public.bootstrap_admin_confirm(p_email text)
+-- 4-4. 관리자 등록 (가입 코드 필요)
+--   흐름: admin.html 에서 회원가입(signUp) → 이 함수 호출
+--   1) 가입 코드 확인  2) 그 이메일의 로그인 계정이 있는지 확인
+--   3) 이메일 확인 절차를 생략하도록 바로 활성화  4) admins 표에 등록
+--   로그인 전(anon)에도 호출할 수 있지만, 코드를 모르면 아무것도 할 수 없습니다.
+create or replace function public.register_admin(p_email text, p_code text)
 returns boolean
 language plpgsql
 security definer
@@ -580,18 +542,19 @@ as $$
 declare
   v_email text := lower(trim(coalesce(p_email, '')));
 begin
-  if v_email = '' then
-    return false;
+  if not public.check_admin_code(p_code) then
+    raise exception '관리자 가입 코드가 올바르지 않습니다.';
   end if;
 
-  if public.has_active_admin() then
-    return false;   -- 이미 관리자가 있음 → 닫힘
+  if v_email = '' then
+    raise exception '이메일을 입력해 주세요.';
   end if;
 
   if not exists (select 1 from auth.users u where lower(u.email) = v_email) then
-    return false;   -- 회원가입이 안 된 이메일
+    raise exception '해당 이메일의 로그인 계정이 아직 없습니다.';
   end if;
 
+  -- 확인 메일 절차 없이 바로 로그인할 수 있도록 활성화
   update auth.users
      set email_confirmed_at = coalesce(email_confirmed_at, now())
    where lower(email) = v_email;
@@ -602,33 +565,11 @@ begin
 end;
 $$;
 
-
--- 4-6. 관리자가 새 교사 계정의 이메일 확인을 대신 처리 (교사 계정 → 교사 추가 에서 호출)
---   admins 표에 등록된 이메일만 확인 처리할 수 있습니다.
-create or replace function public.confirm_admin_email(p_email text)
-returns boolean
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_email text := lower(trim(coalesce(p_email, '')));
-begin
-  if not public.is_admin() then
-    raise exception '관리자만 사용할 수 있습니다.';
-  end if;
-
-  if not exists (select 1 from public.admins a where lower(a.email) = v_email) then
-    return false;
-  end if;
-
-  update auth.users
-     set email_confirmed_at = coalesce(email_confirmed_at, now())
-   where lower(email) = v_email;
-
-  return found;
-end;
-$$;
+-- 예전 버전의 함수들은 제거
+drop function if exists public.bootstrap_admin();
+drop function if exists public.bootstrap_admin_confirm(text);
+drop function if exists public.confirm_admin_email(text);
+drop function if exists public.has_active_admin();
 
 
 -- ---------------------------------------------------------------------
@@ -644,14 +585,7 @@ revoke execute on function public.add_comment(uuid, text)                  from 
 revoke execute on function public.delete_my_comment(uuid)                  from public, anon;
 revoke execute on function public.admin_results()                          from public, anon;
 revoke execute on function public.admin_summary()                          from public, anon;
-revoke execute on function public.bootstrap_admin()                        from public, anon;
-revoke execute on function public.confirm_admin_email(text)                from public, anon;
 
-grant execute on function public.bootstrap_admin()                        to authenticated;
-grant execute on function public.confirm_admin_email(text)                to authenticated;
--- 첫 관리자 만들기는 로그인 전에 호출되므로 anon 에게도 허용 (활성 관리자가 생기면 함수 스스로 닫힘)
-grant execute on function public.bootstrap_admin_confirm(text)            to anon, authenticated;
-grant execute on function public.has_active_admin()                       to anon, authenticated;
 grant execute on function public.claim_student(text, text, text, boolean) to authenticated;
 grant execute on function public.toggle_like(uuid)                        to authenticated;
 grant execute on function public.add_comment(uuid, text)                  to authenticated;
@@ -659,10 +593,16 @@ grant execute on function public.delete_my_comment(uuid)                  to aut
 grant execute on function public.admin_results()                          to authenticated;
 grant execute on function public.admin_summary()                          to authenticated;
 
--- 읽기 전용 함수는 로그인 전에도 호출 가능 (갤러리 미리보기, 학교 드롭다운)
+-- 읽기 전용 함수는 로그인 전에도 호출 가능 (갤러리 미리보기)
 grant execute on function public.get_gallery()  to anon, authenticated;
-grant execute on function public.list_schools() to anon, authenticated;
 grant execute on function public.is_admin()     to anon, authenticated;
+
+-- 관리자 등록은 로그인 전(회원가입 직후)에 호출되므로 anon 에게도 허용. 가입 코드가 있어야만 동작.
+grant execute on function public.check_admin_code(text)        to anon, authenticated;
+grant execute on function public.register_admin(text, text)    to anon, authenticated;
+
+-- secrets 표는 함수 안에서만 읽으므로 클라이언트 역할의 모든 권한을 제거
+revoke all on table public.secrets from anon, authenticated;
 
 
 -- ---------------------------------------------------------------------
@@ -673,7 +613,7 @@ grant execute on function public.is_admin()     to anon, authenticated;
 -- ---------------------------------------------------------------------
 alter table public.settings         enable row level security;
 alter table public.admins           enable row level security;
-alter table public.allowed_students enable row level security;
+alter table public.secrets          enable row level security;
 alter table public.student_profiles enable row level security;
 alter table public.artworks         enable row level security;
 alter table public.likes            enable row level security;
@@ -686,20 +626,16 @@ create policy "settings_read_all"    on public.settings for select using (true);
 create policy "settings_admin_write" on public.settings for update
   using (public.is_admin()) with check (public.is_admin());
 
--- 6-2. admins : 교사만 목록 조회·추가·삭제 (admin.html 의 "교사 계정" 메뉴에서 사용)
+-- 6-2. admins : 교사만 목록 조회·삭제 (추가는 register_admin 함수로만, 가입 코드 필요)
 --      자기 자신은 삭제할 수 없게 하여 관리자가 0명이 되는 사고를 막습니다.
 drop policy if exists "admins_admin_read"   on public.admins;
 drop policy if exists "admins_admin_insert" on public.admins;
 drop policy if exists "admins_admin_delete" on public.admins;
 create policy "admins_admin_read"   on public.admins for select using (public.is_admin());
-create policy "admins_admin_insert" on public.admins for insert with check (public.is_admin());
 create policy "admins_admin_delete" on public.admins for delete
   using (public.is_admin() and lower(email) <> lower(coalesce(auth.jwt() ->> 'email', '')));
 
--- 6-3. allowed_students : 교사만 모든 작업. ★ 학생에게는 어떤 정책도 없음 → 조회 불가
-drop policy if exists "roster_admin_all" on public.allowed_students;
-create policy "roster_admin_all" on public.allowed_students for all
-  using (public.is_admin()) with check (public.is_admin());
+-- 6-3. secrets : ★ 어떤 정책도 두지 않음 → 누구도 직접 읽거나 쓸 수 없음 (함수 안에서만 사용)
 
 -- 6-4. student_profiles : 학생은 자기 행만 읽기, 교사는 전체 읽기/수정/삭제
 --      (생성은 claim_student 함수로만)
@@ -783,17 +719,13 @@ create policy "artworks_bucket_admin_delete" on storage.objects for delete
 
 
 -- ---------------------------------------------------------------------
--- 8. 첫 번째 교사 이메일 (선택)
+-- 8. 관리자 계정 만들기 (SQL 불필요)
 -- ---------------------------------------------------------------------
---  가장 쉬운 방법: 이 파일을 실행한 뒤 admin.html 을 열고
---  로그인 화면의 "처음 설정: 첫 관리자 계정 만들기"에서 이메일·비밀번호를 입력하면 끝.
---  (아직 로그인 계정이 있는 관리자가 없을 때 한 번만 동작합니다)
---
---  대시보드에서 직접 만들고 싶다면: Authentication → Users → Add user (Auto Confirm 체크)
---  로 계정을 만들고 아래 이메일을 맞춰 실행합니다.
+--  admin.html 로그인 화면의 "관리자 계정 만들기"에서
+--  이메일 + 비밀번호 + 관리자 가입 코드(기본값 sonline)를 입력하면 바로 관리자가 됩니다.
+--  예전 버전에서 남은 예시 이메일은 정리합니다.
 -- ---------------------------------------------------------------------
-insert into public.admins (email) values ('admin@seoulonline.sen.hs.kr')
-on conflict (email) do nothing;
+delete from public.admins where email = 'teacher@example.com';
 
 
 -- =====================================================================

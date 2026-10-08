@@ -3,9 +3,10 @@
 // =====================================================================
 //  흐름 요약
 //    1) 이메일+비밀번호로 로그인 → is_admin() 이 true 인지 확인
+//       (계정 만들기는 가입 코드가 필요: check_admin_code → signUp → register_admin)
 //    2) 대시보드: 투표 시작/마감 스위치, 현황 숫자, 제목·안내문
 //    3) 작품: 여러 장 업로드(Storage + artworks 표), 숨김/수정/삭제
-//    4) 명단: CSV 파싱 → 미리보기 → allowed_students 에 upsert
+//    4) 학생: 로그인한 학생 프로필 목록, 기기 연결 해제, 삭제
 //    5) 댓글: 실제 이름과 함께 보기, 숨김/삭제
 //    6) 결과: admin_results() 집계표, CSV 내려받기
 //
@@ -147,8 +148,7 @@
     settings: null,
     uploadQueue: [],      // [{ file, previewUrl, status }]
     artworkInfo: [],      // 작품 정보 CSV [{ title, author, description, keyword }]
-    roster: [],           // 등록된 명단 (검색용 캐시)
-    rosterParsed: null,   // CSV 미리보기 데이터
+    students: [],         // 참여 학생 프로필 (검색용 캐시)
     loaded: {},           // 각 탭을 한 번 불러왔는지
   };
 
@@ -174,20 +174,12 @@
 
   /** 로그인은 됐지만 admins 표에 없는 이메일이면 거부 */
   async function enterAdmin(user) {
-    let { data: isAdmin, error } = await sb.rpc('is_admin');
-
-    // 관리자가 아니면: "아직 관리자가 아무도 없는 상태"인지 확인해 첫 관리자로 등록 시도
-    // (bootstrap_admin 은 실제 로그인 계정이 있는 관리자가 한 명이라도 있으면 false 를 돌려줌)
-    if (!error && !isAdmin) {
-      const boot = await sb.rpc('bootstrap_admin');
-      if (!boot.error && boot.data === true) isAdmin = true;
-    }
-
+    const { data: isAdmin, error } = await sb.rpc('is_admin');
     if (error || !isAdmin) {
       await sb.auth.signOut();
       showLogin();
       $('loginError').textContent =
-        '이 계정은 관리자로 등록되어 있지 않습니다. 다른 관리자에게 "교사 계정 → 교사 추가"로 등록을 요청하세요.';
+        '이 계정은 관리자로 등록되어 있지 않습니다. 아래 "관리자 계정 만들기"에서 가입 코드로 등록하세요.';
       return;
     }
     state.user = user;
@@ -214,7 +206,7 @@
 
     if (error) {
       if (/invalid/i.test(error.message)) errEl.textContent = '이메일 또는 비밀번호가 올바르지 않습니다.';
-      else if (/not confirmed/i.test(error.message)) errEl.textContent = '아직 활성화되지 않은 계정입니다. 다른 관리자에게 "교사 계정 → 교사 추가"로 등록을 요청하세요.';
+      else if (/not confirmed/i.test(error.message)) errEl.textContent = '아직 활성화되지 않은 계정입니다. 아래 "관리자 계정 만들기"에서 가입 코드로 등록하세요.';
       else errEl.textContent = error.message;
       return;
     }
@@ -229,51 +221,56 @@
     showLogin();
   }
 
-  /** 처음 설정: 첫 관리자 계정 만들기 (회원가입 → bootstrap_admin) */
-  async function onBootstrap(e) {
+  /** 관리자 계정 만들기 (가입 코드 확인 → 회원가입 → register_admin → 로그인) */
+  async function onRegister(e) {
     e.preventDefault();
-    const errEl = $('bootError');
+    const errEl = $('regError');
     errEl.textContent = '';
-    const email = $('bootEmail').value.trim().toLowerCase();
-    const password = $('bootPassword').value;
+    const email = $('regEmail').value.trim().toLowerCase();
+    const password = $('regPassword').value;
+    const code = $('regCode').value.trim();
     if (!email) { errEl.textContent = '이메일을 입력해 주세요.'; return; }
     if (password.length < 8) { errEl.textContent = '비밀번호는 8자 이상으로 해 주세요.'; return; }
+    if (!code) { errEl.textContent = '관리자 가입 코드를 입력해 주세요.'; return; }
 
-    const btn = $('bootSubmit');
+    const btn = $('regSubmit');
     btn.disabled = true; btn.textContent = '만드는 중…';
 
     try {
-      // 1) 회원가입. 이 클라이언트로 가입하면 (Confirm email 이 꺼진 경우) 바로 로그인 세션이 생깁니다.
+      // 0) 가입 코드부터 확인 (틀린 코드로 계정만 만들어지는 일을 막음)
+      const chk = await sb.rpc('check_admin_code', { p_code: code });
+      if (chk.error) throw chk.error;
+      if (!chk.data) throw new Error('관리자 가입 코드가 올바르지 않습니다.');
+
+      // 1) 회원가입. 이미 있는 계정이면 그 비밀번호로 로그인 시도
       let { data, error } = await sb.auth.signUp({ email, password });
       if (error) {
-        // 이미 있는 계정이면 그 비밀번호로 로그인 시도
         if (/already|registered|exists/i.test(error.message)) {
           const r = await sb.auth.signInWithPassword({ email, password });
-          if (r.error) throw new Error('이미 있는 계정인데 비밀번호가 다릅니다. 로그인 칸에서 기존 비밀번호로 로그인하세요.');
+          if (r.error) throw new Error('이미 있는 계정인데 비밀번호가 다릅니다. 위 로그인 칸에서 기존 비밀번호로 로그인하세요.');
           data = r.data;
         } else {
           throw new Error(mapSignUpError(error.message));
         }
       }
 
-      if (!data.session) {
-        // Confirm email 이 켜진 프로젝트: 세션이 없으므로 DB 함수로 이메일 확인 + 관리자 등록을 대신 처리
-        const { data: ok, error: bErr } = await sb.rpc('bootstrap_admin_confirm', { p_email: email });
-        if (bErr) throw bErr;
-        if (!ok) throw new Error('이미 관리자가 있어 이 메뉴로는 등록할 수 없습니다. 기존 관리자에게 "교사 계정 → 교사 추가"를 요청하세요.');
+      // 2) 관리자 등록 (가입 코드 재확인 + 계정 활성화 + admins 표 등록)
+      const reg = await sb.rpc('register_admin', { p_email: email, p_code: code });
+      if (reg.error) throw reg.error;
 
-        // 확인 처리가 끝났으니 방금 정한 비밀번호로 로그인
+      // 3) 세션이 없으면(가입 직후) 방금 정한 비밀번호로 로그인
+      if (!data.session) {
         const r = await sb.auth.signInWithPassword({ email, password });
         if (r.error) throw new Error('계정은 만들어졌지만 로그인에 실패했습니다: ' + r.error.message);
         data = r.data;
       }
 
-      // 2) 세션이 있으면 관리자 등록 확인 (enterAdmin 안에서 필요 시 bootstrap_admin 호출)
-      $('bootPassword').value = '';
+      $('regPassword').value = '';
+      $('regCode').value = '';
       await enterAdmin(data.session.user);
-      if (state.user) toast('첫 관리자 계정이 만들어졌습니다. 환영합니다!');
+      if (state.user) toast('관리자 계정이 만들어졌습니다. 환영합니다!');
     } catch (err) {
-      console.error('첫 관리자 만들기 실패', err);
+      console.error('관리자 계정 만들기 실패', err);
       errEl.textContent = err.message || '실패했습니다.';
     } finally {
       btn.disabled = false; btn.textContent = '계정 만들고 관리자로 등록';
@@ -286,7 +283,7 @@
   const loaders = {
     dashboard: async () => { await Promise.all([loadSettings(), loadSummary(), loadAdmins()]); },
     artworks: loadArtworks,
-    roster: loadRoster,
+    students: loadStudents,
     comments: loadComments,
     results: loadResults,
   };
@@ -350,7 +347,6 @@
     const s = Array.isArray(data) ? data[0] : data;
     if (!s) return;
     $('statArtworks').textContent = s.artwork_count;
-    $('statRoster').textContent = s.roster_count;
     $('statLogins').textContent = s.login_count;
     $('statLikes').textContent = s.like_total;
     $('statComments').textContent = s.comment_total;
@@ -389,44 +385,45 @@
     errEl.textContent = '';
     const email = $('newAdminEmail').value.trim().toLowerCase();
     const password = $('newAdminPassword').value;
+    const code = $('newAdminCode').value.trim();
 
     if (!email) { errEl.textContent = '이메일을 입력해 주세요.'; return; }
     if (password && password.length < 8) { errEl.textContent = '비밀번호는 8자 이상으로 해 주세요.'; return; }
+    if (!code) { errEl.textContent = '관리자 가입 코드를 입력해 주세요.'; return; }
 
     const btn = $('adminAddBtn');
     btn.disabled = true; btn.textContent = '처리 중…';
     let note = '';
 
     try {
+      // (0) 가입 코드 확인
+      const chk = await sb.rpc('check_admin_code', { p_code: code });
+      if (chk.error) throw chk.error;
+      if (!chk.data) throw new Error('관리자 가입 코드가 올바르지 않습니다.');
+
       // (1) 비밀번호를 입력했으면 Supabase 로그인 계정 생성
+      //     세션을 저장하지 않는 별도 클라이언트로 가입해, 지금 로그인한 교사의 세션이 바뀌지 않게 함
       if (password) {
         const tmp = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {
           auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
         });
         const { data, error } = await tmp.auth.signUp({ email, password });
         if (error) {
-          // 이미 있는 계정이면 등록만 진행
           if (/already|registered|exists/i.test(error.message)) note = ' (이미 있는 계정이라 등록만 했습니다)';
           else throw new Error(mapSignUpError(error.message));
         } else if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-          // Confirm email 이 켜진 프로젝트는 중복 가입 시 빈 identities 를 돌려줍니다.
           note = ' (이미 있는 계정이라 등록만 했습니다)';
         }
       }
 
-      // (2) admins 표에 이메일 등록 (RLS: 관리자만 가능)
-      const { error: insErr } = await sb.from('admins').upsert({ email }, { onConflict: 'email' });
-      if (insErr) throw insErr;
-
-      // (3) Confirm email 설정이 켜져 있어도 바로 로그인할 수 있도록 이메일 확인을 대신 처리
-      if (password) {
-        const { error: cErr } = await sb.rpc('confirm_admin_email', { p_email: email });
-        if (cErr) note += ' (계정 활성화 실패: ' + cErr.message + ')';
-      }
+      // (2) 관리자 등록 (계정 활성화 + admins 표 등록)
+      const reg = await sb.rpc('register_admin', { p_email: email, p_code: code });
+      if (reg.error) throw reg.error;
 
       toast(`${email} 을(를) 관리자로 등록했습니다.${note}`);
       $('newAdminEmail').value = '';
       $('newAdminPassword').value = '';
+      $('newAdminCode').value = '';
       await loadAdmins();
     } catch (err) {
       console.error('교사 추가 실패', err);
@@ -708,122 +705,67 @@
   }
 
   // -------------------------------------------------------------------
-  // 7. 참가 명단
+  // 7. 참여 학생 (student_profiles)
   // -------------------------------------------------------------------
-  function downloadTemplate() {
-    downloadText('참가명단_예시.csv', toCsv([
-      ['학교', '학번', '이름'],
-      ['한빛중학교', '10101', '홍길동'],
-      ['한빛중학교', '10102', '김영희'],
-    ]));
-  }
-
-  async function onRosterFile(file) {
-    if (!file) return;
-    const text = await readTextSmart(file);
-    const rows = parseCsv(text);
-    if (!rows.length) { toast('비어 있는 파일입니다.', true); return; }
-
-    // 첫 줄이 제목 행이면 제거 ("학교" 또는 "school" 글자가 있으면 제목으로 간주)
-    const first = rows[0].map((c) => c.trim().toLowerCase());
-    if (first.some((c) => c.includes('학교') || c.includes('school') || c.includes('이름') || c.includes('name'))) rows.shift();
-
-    const valid = [];
-    const invalid = [];
-    rows.forEach((r, i) => {
-      const school = (r[0] || '').trim();
-      const student_no = (r[1] || '').trim();
-      const name = (r[2] || '').trim();
-      if (school && student_no && name) valid.push({ school, student_no, name });
-      else invalid.push(i + 1);
-    });
-
-    // 같은 (학교, 학번)이 파일 안에서 중복이면 마지막 것만 남김
-    const map = new Map();
-    valid.forEach((v) => map.set(`${v.school}\u0000${v.student_no}`, v));
-    state.rosterParsed = Array.from(map.values());
-
-    $('rosterPreviewInfo').textContent =
-      `${state.rosterParsed.length}명 인식` +
-      (valid.length !== state.rosterParsed.length ? ` (파일 안 중복 ${valid.length - state.rosterParsed.length}건 제거)` : '') +
-      (invalid.length ? ` · 빈 칸이 있어 건너뛴 줄: ${invalid.slice(0, 10).join(', ')}${invalid.length > 10 ? '…' : ''}` : '');
-
-    const preview = state.rosterParsed.slice(0, 20);
-    $('rosterPreviewTable').innerHTML =
-      '<thead><tr><th>학교</th><th>학번</th><th>이름</th></tr></thead><tbody>' +
-      preview.map((r) => `<tr><td>${escapeHtml(r.school)}</td><td>${escapeHtml(r.student_no)}</td><td>${escapeHtml(r.name)}</td></tr>`).join('') +
-      (state.rosterParsed.length > 20 ? `<tr><td colspan="3" class="empty">… 외 ${state.rosterParsed.length - 20}명</td></tr>` : '') +
-      '</tbody>';
-    $('rosterPreviewWrap').classList.remove('hidden');
-    $('rosterFile').value = '';
-  }
-
-  async function uploadRoster() {
-    const rows = state.rosterParsed || [];
-    if (!rows.length) return;
-    const btn = $('rosterUploadBtn');
-    btn.disabled = true; btn.textContent = '등록 중…';
-
-    // 500명씩 나눠서 upsert (한 번에 너무 많이 보내면 요청이 커짐)
-    let failed = null;
-    for (let i = 0; i < rows.length; i += 500) {
-      const chunk = rows.slice(i, i + 500);
-      const { error } = await sb.from('allowed_students').upsert(chunk, { onConflict: 'school,student_no' });
-      if (error) { failed = error; break; }
-    }
-    btn.disabled = false; btn.textContent = '이대로 등록';
-
-    if (failed) { toast('등록 실패: ' + failed.message, true); return; }
-    toast(`${rows.length}명을 등록했습니다.`);
-    state.rosterParsed = null;
-    $('rosterPreviewWrap').classList.add('hidden');
-    await loadRoster();
-    loadSummary().catch(() => {});
-  }
-
-  async function loadRoster() {
-    const { data, error } = await sb.from('allowed_students').select('*')
+  async function loadStudents() {
+    const { data, error } = await sb.from('student_profiles')
+      .select('id, school, student_no, name, user_id, created_at, last_login_at')
       .order('school').order('student_no').limit(5000);
-    if (error) { $('rosterTable').innerHTML = `<tr><td class="empty">${escapeHtml(error.message)}</td></tr>`; return; }
-    state.roster = data;
-    renderRoster();
+    if (error) { $('studentTable').innerHTML = `<tr><td class="empty">${escapeHtml(error.message)}</td></tr>`; return; }
+    state.students = data;
+    renderStudents();
   }
 
-  function renderRoster() {
-    const q = $('rosterSearch').value.trim().toLowerCase();
+  function renderStudents() {
+    const q = $('studentSearch').value.trim().toLowerCase();
+    const all = state.students || [];
     const list = q
-      ? state.roster.filter((r) => r.name.toLowerCase().includes(q) || r.student_no.includes(q) || r.school.toLowerCase().includes(q))
-      : state.roster;
-    $('rosterCount').textContent = `(${state.roster.length}명${q ? `, 검색 ${list.length}명` : ''})`;
+      ? all.filter((r) => r.name.toLowerCase().includes(q) || r.student_no.includes(q) || r.school.toLowerCase().includes(q))
+      : all;
+    $('studentCount').textContent = `(${all.length}명${q ? `, 검색 ${list.length}명` : ''})`;
 
-    if (!list.length) { $('rosterTable').innerHTML = '<tr><td class="empty">명단이 없습니다. CSV 를 업로드하세요.</td></tr>'; return; }
-    $('rosterTable').innerHTML =
-      '<thead><tr><th>학교</th><th>학번</th><th>이름</th><th></th></tr></thead><tbody>' +
+    if (!list.length) { $('studentTable').innerHTML = '<tr><td class="empty">아직 로그인한 학생이 없습니다.</td></tr>'; return; }
+    $('studentTable').innerHTML =
+      '<thead><tr><th>학교</th><th>학번</th><th>이름</th><th>마지막 로그인</th><th></th></tr></thead><tbody>' +
       list.slice(0, 500).map((r) => `
         <tr data-id="${r.id}">
           <td>${escapeHtml(r.school)}</td><td>${escapeHtml(r.student_no)}</td><td>${escapeHtml(r.name)}</td>
-          <td class="actions"><button class="btn btn--small btn--ghost" data-action="delete-roster">삭제</button></td>
+          <td>${formatDate(r.last_login_at)}${r.user_id ? '' : ' <span class="tag">연결 없음</span>'}</td>
+          <td class="actions">
+            <button class="btn btn--small btn--ghost" data-action="unlink-student">기기 연결 해제</button>
+            <button class="btn btn--small btn--danger" data-action="delete-student">삭제</button>
+          </td>
         </tr>`).join('') +
-      (list.length > 500 ? `<tr><td colspan="4" class="empty">… 외 ${list.length - 500}명 (검색으로 좁혀 보세요)</td></tr>` : '') +
+      (list.length > 500 ? `<tr><td colspan="5" class="empty">… 외 ${list.length - 500}명 (검색으로 좁혀 보세요)</td></tr>` : '') +
       '</tbody>';
   }
 
-  async function deleteRosterRow(id) {
-    const { error } = await sb.from('allowed_students').delete().eq('id', id);
+  /** 기기 연결 해제: 프로필은 남기고 로그인 계정만 끊음 → 학생이 다시 로그인하면 새 기기에 연결됨 */
+  async function unlinkStudent(id) {
+    const { error } = await sb.from('student_profiles').update({ user_id: null }).eq('id', id);
     if (error) { toast(error.message, true); return; }
-    state.roster = state.roster.filter((r) => r.id !== id);
-    renderRoster();
+    toast('연결을 해제했습니다. 학생이 다시 로그인하면 됩니다.');
+    await loadStudents();
   }
 
-  async function clearRoster() {
-    if (!confirm('등록된 명단을 전부 삭제할까요?\n(이미 로그인한 학생의 투표 기록은 그대로 남습니다)')) return;
-    if (prompt('정말 삭제하려면 "삭제" 라고 입력하세요.') !== '삭제') return;
-    // Supabase 는 조건 없는 delete 를 막으므로 "항상 참"인 조건을 붙입니다.
-    const { error } = await sb.from('allowed_students').delete().gte('created_at', '1970-01-01');
+  async function deleteStudent(id) {
+    const r = (state.students || []).find((x) => x.id === id);
+    if (!confirm(`${r ? r.school + ' ' + r.student_no + ' ' + r.name : '이 학생'} 을(를) 삭제할까요?
+이 학생의 하트와 댓글도 함께 삭제됩니다.`)) return;
+    const { error } = await sb.from('student_profiles').delete().eq('id', id);
     if (error) { toast(error.message, true); return; }
-    toast('명단을 모두 삭제했습니다.');
-    await loadRoster();
+    toast('삭제했습니다.');
+    await loadStudents();
     loadSummary().catch(() => {});
+  }
+
+  function downloadStudents() {
+    const all = state.students || [];
+    if (!all.length) { toast('내려받을 학생이 없습니다.', true); return; }
+    downloadText(`참여학생_${todayStamp()}.csv`, toCsv([
+      ['학교', '학번', '이름', '처음 로그인', '마지막 로그인'],
+      ...all.map((r) => [r.school, r.student_no, r.name, formatDate(r.created_at), formatDate(r.last_login_at)]),
+    ]));
   }
 
   // -------------------------------------------------------------------
@@ -939,7 +881,7 @@
   function bindEvents() {
     $('loginForm').addEventListener('submit', onLogin);
     $('logoutBtn').addEventListener('click', onLogout);
-    $('bootstrapForm').addEventListener('submit', onBootstrap);
+    $('registerForm').addEventListener('submit', onRegister);
 
     document.querySelectorAll('.admin-nav__item').forEach((b) => {
       b.addEventListener('click', () => switchView(b.dataset.view));
@@ -1000,16 +942,16 @@
       }
     });
 
-    // 명단
-    $('downloadTemplate').addEventListener('click', downloadTemplate);
-    $('rosterFile').addEventListener('change', (e) => onRosterFile(e.target.files[0]));
-    $('rosterUploadBtn').addEventListener('click', uploadRoster);
-    $('rosterCancelBtn').addEventListener('click', () => { state.rosterParsed = null; $('rosterPreviewWrap').classList.add('hidden'); });
-    $('rosterSearch').addEventListener('input', renderRoster);
-    $('rosterClearBtn').addEventListener('click', clearRoster);
-    $('rosterTable').addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-action="delete-roster"]');
-      if (btn) deleteRosterRow(btn.closest('tr').dataset.id);
+    // 학생
+    $('reloadStudents').addEventListener('click', loadStudents);
+    $('downloadStudents').addEventListener('click', downloadStudents);
+    $('studentSearch').addEventListener('input', renderStudents);
+    $('studentTable').addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      const id = btn.closest('tr').dataset.id;
+      if (btn.dataset.action === 'unlink-student') unlinkStudent(id);
+      if (btn.dataset.action === 'delete-student') deleteStudent(id);
     });
 
     // 댓글
