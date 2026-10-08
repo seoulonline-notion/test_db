@@ -174,12 +174,20 @@
 
   /** 로그인은 됐지만 admins 표에 없는 이메일이면 거부 */
   async function enterAdmin(user) {
-    const { data: isAdmin, error } = await sb.rpc('is_admin');
+    let { data: isAdmin, error } = await sb.rpc('is_admin');
+
+    // 관리자가 아니면: "아직 관리자가 아무도 없는 상태"인지 확인해 첫 관리자로 등록 시도
+    // (bootstrap_admin 은 실제 로그인 계정이 있는 관리자가 한 명이라도 있으면 false 를 돌려줌)
+    if (!error && !isAdmin) {
+      const boot = await sb.rpc('bootstrap_admin');
+      if (!boot.error && boot.data === true) isAdmin = true;
+    }
+
     if (error || !isAdmin) {
       await sb.auth.signOut();
       showLogin();
       $('loginError').textContent =
-        '이 계정은 관리자로 등록되어 있지 않습니다. schema.sql 의 admins 표에 이메일을 추가했는지 확인하세요.';
+        '이 계정은 관리자로 등록되어 있지 않습니다. 다른 관리자에게 "교사 계정 → 교사 추가"로 등록을 요청하세요.';
       return;
     }
     state.user = user;
@@ -219,6 +227,53 @@
     state.user = null;
     state.loaded = {};
     showLogin();
+  }
+
+  /** 처음 설정: 첫 관리자 계정 만들기 (회원가입 → bootstrap_admin) */
+  async function onBootstrap(e) {
+    e.preventDefault();
+    const errEl = $('bootError');
+    errEl.textContent = '';
+    const email = $('bootEmail').value.trim().toLowerCase();
+    const password = $('bootPassword').value;
+    if (!email) { errEl.textContent = '이메일을 입력해 주세요.'; return; }
+    if (password.length < 8) { errEl.textContent = '비밀번호는 8자 이상으로 해 주세요.'; return; }
+
+    const btn = $('bootSubmit');
+    btn.disabled = true; btn.textContent = '만드는 중…';
+
+    try {
+      // 1) 회원가입. 이 클라이언트로 가입하면 (Confirm email 이 꺼진 경우) 바로 로그인 세션이 생깁니다.
+      let { data, error } = await sb.auth.signUp({ email, password });
+      if (error) {
+        // 이미 있는 계정이면 그 비밀번호로 로그인 시도
+        if (/already|registered|exists/i.test(error.message)) {
+          const r = await sb.auth.signInWithPassword({ email, password });
+          if (r.error) throw new Error('이미 있는 계정인데 비밀번호가 다릅니다. 로그인 칸에서 기존 비밀번호로 로그인하세요.');
+          data = r.data;
+        } else {
+          throw new Error(mapSignUpError(error.message));
+        }
+      }
+
+      if (!data.session) {
+        // Confirm email 이 켜진 프로젝트: 메일 확인 후 로그인하면 enterAdmin 에서 자동으로 bootstrap 됩니다.
+        errEl.textContent = '';
+        toast('확인 메일을 보냈습니다. 메일의 링크를 누른 뒤 위 로그인 칸으로 로그인하면 관리자로 등록됩니다.');
+        $('email').value = email;
+        return;
+      }
+
+      // 2) 세션이 있으면 바로 관리자 등록 시도 (enterAdmin 안에서 bootstrap_admin 호출)
+      $('bootPassword').value = '';
+      await enterAdmin(data.session.user);
+      if (state.user) toast('첫 관리자 계정이 만들어졌습니다. 환영합니다!');
+    } catch (err) {
+      console.error('첫 관리자 만들기 실패', err);
+      errEl.textContent = err.message || '실패했습니다.';
+    } finally {
+      btn.disabled = false; btn.textContent = '계정 만들고 관리자로 등록';
+    }
   }
 
   // -------------------------------------------------------------------
@@ -875,6 +930,7 @@
   function bindEvents() {
     $('loginForm').addEventListener('submit', onLogin);
     $('logoutBtn').addEventListener('click', onLogout);
+    $('bootstrapForm').addEventListener('submit', onBootstrap);
 
     document.querySelectorAll('.admin-nav__item').forEach((b) => {
       b.addEventListener('click', () => switchView(b.dataset.view));

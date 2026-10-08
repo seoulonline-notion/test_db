@@ -42,6 +42,28 @@
       <p class="form-error" id="loginError" role="alert"></p>
       <button type="submit" class="btn btn--primary btn--block" id="loginSubmit">로그인</button>
     </form>
+
+    <!-- 처음 설정: 관리자가 아직 없을 때 첫 계정을 여기서 만듦 -->
+    <details class="card-box bootstrap">
+      <summary>처음 설정: 첫 관리자 계정 만들기</summary>
+      <p class="section-sub" style="margin-top:10px">
+        아직 관리자 계정이 하나도 없을 때 한 번만 쓰는 메뉴입니다. 이메일과 비밀번호를 정하면
+        Supabase 로그인 계정이 만들어지고 자동으로 관리자로 등록됩니다.<br/>
+        관리자가 이미 있으면 이 메뉴로는 아무도 등록되지 않습니다.
+      </p>
+      <form id="bootstrapForm" novalidate>
+        <div class="field">
+          <label for="bootEmail">이메일</label>
+          <input id="bootEmail" type="email" autocomplete="off" placeholder="admin@school.kr" required />
+        </div>
+        <div class="field">
+          <label for="bootPassword">비밀번호 (8자 이상)</label>
+          <input id="bootPassword" type="password" autocomplete="new-password" minlength="8" required />
+        </div>
+        <p class="form-error" id="bootError" role="alert"></p>
+        <button type="submit" class="btn btn--block" id="bootSubmit">계정 만들고 관리자로 등록</button>
+      </form>
+    </details>
   </main>
 
   <!-- ===================== 관리 화면 ===================== -->

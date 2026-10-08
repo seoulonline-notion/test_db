@@ -498,6 +498,45 @@ end;
 $$;
 
 
+-- 4-3. 첫 관리자 등록 (admin.html 로그인 화면의 "첫 관리자 계정 만들기"에서 호출)
+--   "로그인 계정이 실제로 있는 관리자"가 아직 한 명도 없을 때만, 지금 로그인한 사용자를
+--   관리자로 등록합니다. 관리자가 한 명이라도 생기면 이 함수는 더 이상 아무도 등록하지 않으므로
+--   처음 설정이 끝난 뒤에는 안전하게 닫힙니다.
+create or replace function public.bootstrap_admin()
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text := lower(coalesce(auth.jwt() ->> 'email', ''));
+begin
+  -- 이메일 계정(익명 아님)으로 로그인한 사람만
+  if v_email = '' or coalesce((auth.jwt() ->> 'is_anonymous')::boolean, false) then
+    return false;
+  end if;
+
+  -- 이미 관리자면 그대로 true
+  if public.is_admin() then
+    return true;
+  end if;
+
+  -- admins 표의 이메일 중 실제 로그인 계정(auth.users)이 있는 사람이 있으면 닫힘
+  if exists (
+    select 1
+    from public.admins a
+    join auth.users u on lower(u.email) = lower(a.email)
+  ) then
+    return false;
+  end if;
+
+  insert into public.admins (email) values (v_email)
+  on conflict (email) do nothing;
+  return true;
+end;
+$$;
+
+
 -- ---------------------------------------------------------------------
 -- 5. 함수 실행 권한
 -- ---------------------------------------------------------------------
@@ -511,7 +550,9 @@ revoke execute on function public.add_comment(uuid, text)                  from 
 revoke execute on function public.delete_my_comment(uuid)                  from public, anon;
 revoke execute on function public.admin_results()                          from public, anon;
 revoke execute on function public.admin_summary()                          from public, anon;
+revoke execute on function public.bootstrap_admin()                        from public, anon;
 
+grant execute on function public.bootstrap_admin()                        to authenticated;
 grant execute on function public.claim_student(text, text, text, boolean) to authenticated;
 grant execute on function public.toggle_like(uuid)                        to authenticated;
 grant execute on function public.add_comment(uuid, text)                  to authenticated;
@@ -643,13 +684,14 @@ create policy "artworks_bucket_admin_delete" on storage.objects for delete
 
 
 -- ---------------------------------------------------------------------
--- 8. ★ 첫 번째 교사 계정 이메일 등록
+-- 8. 첫 번째 교사 이메일 (선택)
 -- ---------------------------------------------------------------------
---  1) Supabase 대시보드 → Authentication → Users → Add user 로
---     교사 이메일 + 비밀번호 계정을 먼저 만듭니다. (Auto Confirm 체크)
---  2) 아래 이메일이 그 계정 이메일과 같은지 확인한 뒤 실행합니다.
---  첫 교사가 로그인한 뒤에는 admin.html → 대시보드 → "교사 계정" 에서
---  다른 교사를 추가할 수 있으므로, 여기서는 1명만 등록하면 됩니다.
+--  가장 쉬운 방법: 이 파일을 실행한 뒤 admin.html 을 열고
+--  로그인 화면의 "처음 설정: 첫 관리자 계정 만들기"에서 이메일·비밀번호를 입력하면 끝.
+--  (아직 로그인 계정이 있는 관리자가 없을 때 한 번만 동작합니다)
+--
+--  대시보드에서 직접 만들고 싶다면: Authentication → Users → Add user (Auto Confirm 체크)
+--  로 계정을 만들고 아래 이메일을 맞춰 실행합니다.
 -- ---------------------------------------------------------------------
 insert into public.admins (email) values ('admin@seoulonline.sen.hs.kr')
 on conflict (email) do nothing;

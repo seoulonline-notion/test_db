@@ -48,36 +48,45 @@ Supabase 는 기본적으로 **같은 IP 에서 1시간에 익명 로그인 30�
 1. **Authentication** → **Rate Limits**
 2. **Rate limit for anonymous users** 값을 학생 수보다 넉넉하게 (예: `500`) → Save
 
-### 1-3. 교사 계정 만들기
+### 1-3. 이메일 확인 설정 (선택이지만 추천)
 
-1. **Authentication** → **Users** → 오른쪽 위 **Add user** → **Create new user**
-2. 교사 이메일과 비밀번호 입력
-3. **Auto Confirm User** 체크 (체크하지 않으면 확인 메일을 눌러야 로그인됩니다)
-4. **Create user**
+교사 계정을 만들 때 확인 메일 절차를 생략하려면:
 
-이 이메일·비밀번호로 `admin.html` 에 로그인하게 됩니다.
+1. **Authentication** → **Sign In / Providers** → **Email**
+2. **Confirm email** 을 **끄기** → Save
+
+켜 둔 채로도 쓸 수 있지만, 새 교사는 받은 확인 메일의 링크를 눌러야 로그인됩니다.
 
 ### 1-4. schema.sql 실행하기
 
 1. 이 프로젝트의 `supabase/schema.sql` 을 메모장이나 VS Code 로 엽니다.
-2. 파일 **맨 아래**에서 아래 줄을 찾아 이메일이 **1-3 에서 만든 교사 이메일**과 같은지 확인합니다. (기본값: `admin@seoulonline.sen.hs.kr`)
-   ```sql
-   insert into public.admins (email) values ('admin@seoulonline.sen.hs.kr')
-   ```
-3. 파일 내용 **전체를 복사**합니다 (Ctrl+A → Ctrl+C).
-4. Supabase 대시보드 → 왼쪽 메뉴 **SQL Editor** → **New query**
-5. 붙여넣기(Ctrl+V) → 오른쪽 아래 **Run** (또는 Ctrl+Enter)
-6. 아래에 `Success. No rows returned` 가 나오면 성공입니다.
+2. 파일 내용 **전체를 복사**합니다 (Ctrl+A → Ctrl+C).
+3. Supabase 대시보드 → 왼쪽 메뉴 **SQL Editor** → **New query**
+4. 붙여넣기(Ctrl+V) → 오른쪽 아래 **Run** (또는 Ctrl+Enter)
+5. 아래에 `Success. No rows returned` 가 나오면 성공입니다.
 
 이 한 번의 실행으로 테이블 7개, 보안 정책(RLS), 함수, 이미지 저장소(Storage 버킷 `artworks`)가 모두 만들어집니다.
-**여러 번 실행해도 안전**하게 작성되어 있으니, 나중에 교사를 추가하고 싶으면 맨 아래 insert 문만 고쳐서 다시 실행해도 됩니다.
+**여러 번 실행해도 안전**하게 작성되어 있습니다.
+
+### 1-5. 첫 관리자 계정 만들기
+
+1. 아래 ② 로컬 테스트처럼 `admin.html` 을 엽니다 (또는 ③ 배포 후 교사용 주소).
+2. 로그인 칸 아래 **"처음 설정: 첫 관리자 계정 만들기"** 를 펼칩니다.
+3. 교사 이메일과 비밀번호(8자 이상)를 입력 → **계정 만들고 관리자로 등록**
+4. 1-3 에서 Confirm email 을 껐다면 바로 관리자 화면이 열립니다. 켜져 있다면 확인 메일 링크를 누른 뒤 로그인 칸으로 로그인하세요.
+
+이 메뉴는 **관리자가 아무도 없을 때 한 번만** 동작하고, 그 뒤에는 자동으로 닫힙니다.
+두 번째 교사부터는 관리자 화면 → **대시보드 → 교사 계정 → 교사 추가**에서 만듭니다.
+
+> 대시보드에서 직접 만들고 싶다면: **Authentication → Users → Add user** (Auto Confirm 체크)로 계정을 만든 뒤,
+> `schema.sql` 맨 아래 insert 문의 이메일을 맞춰 다시 실행하면 됩니다.
 
 > 교사를 더 추가할 때는 SQL 이 필요 없습니다. 첫 교사가 `admin.html` 에 로그인한 뒤
 > **대시보드 → 교사 계정 → 교사 추가**에서 이메일과 비밀번호를 넣으면 계정 생성과 관리자 등록이 한 번에 됩니다.
 > Supabase 의 **Confirm email** 설정이 켜져 있으면 새 교사는 확인 메일의 링크를 눌러야 로그인할 수 있습니다.
 > (Authentication → Sign In / Providers → Email → Confirm email 을 끄면 바로 로그인 가능)
 
-### 1-5. URL 과 key 를 config.js 에 넣기
+### 1-6. URL 과 key 를 config.js 에 넣기
 
 1. Supabase 대시보드 → 왼쪽 아래 **Project Settings**(톱니바퀴) → **API** (또는 **API Keys**)
 2. 두 값을 복사합니다.
@@ -123,7 +132,7 @@ python -m http.server 8765
 **교사 화면 먼저** (`http://localhost:8765/admin.html`)
 
 1. 교사 이메일·비밀번호로 로그인
-   - "관리자로 등록되어 있지 않습니다" 가 뜨면 1-4 의 이메일 수정이 빠진 것입니다.
+   - "관리자로 등록되어 있지 않습니다" 가 뜨면 1-5 의 첫 관리자 만들기를 아직 안 한 것입니다.
 2. **참가 명단** 탭 → **예시 CSV 내려받기** → 엑셀에서 열어 실제 학생으로 채우기 → **CSV UTF-8** 로 저장 → **CSV 파일 선택** → 미리보기 확인 → **이대로 등록**
    - 열 순서: `학교, 학번, 이름`. 첫 줄 제목은 자동으로 건너뜁니다.
    - 학번은 `10203` 처럼 학년·반·번호를 붙인 형태를 추천합니다 (학교 안에서 겹치지만 않으면 됩니다).
@@ -226,11 +235,11 @@ delete from auth.users where is_anonymous = true;
 
 | 증상 | 원인 · 해결 |
 |---|---|
-| 화면 위에 "Supabase 설정이 비어 있습니다" | `js/config.js` 에 URL/key 를 넣지 않았습니다. 1-5 참고 |
+| 화면 위에 "Supabase 설정이 비어 있습니다" | `js/config.js` 에 URL/key 를 넣지 않았습니다. 1-6 참고 |
 | 로그인 시 "Anonymous sign-ins 가 꺼져 있습니다" | 1-1 에서 익명 로그인을 켜지 않았습니다 |
 | 어느 순간부터 학생 로그인이 안 됨 | 1-2 의 Rate Limit(기본 30회/시간/IP)에 걸렸습니다. 값을 올리세요 |
 | "참가 명단에서 찾을 수 없습니다" | 학교 이름·학번·이름이 CSV 와 한 글자라도 다릅니다. 관리자 → 참가 명단에서 검색해 확인. 이름의 공백은 무시됩니다 |
-| 교사 로그인 후 "관리자로 등록되어 있지 않습니다" | `schema.sql` 맨 아래 이메일을 안 바꿨거나, Users 의 이메일과 다릅니다. 대소문자는 구분하지 않습니다 |
+| 교사 로그인 후 "관리자로 등록되어 있지 않습니다" | 이미 다른 관리자가 있는 상태입니다. 그 관리자에게 대시보드 → 교사 계정에서 등록을 요청하세요 |
 | 이미지가 안 보임 | Storage → `artworks` 버킷이 **Public** 인지 확인. schema.sql 을 다시 실행하면 복구됩니다 |
 | 업로드 시 "new row violates row-level security policy" | 로그인한 계정이 admins 표에 없습니다 |
 | CSV 를 올렸는데 한글이 깨짐 | 엑셀에서 **CSV UTF-8** 형식으로 다시 저장하세요. (일반 CSV 도 자동 감지하지만 드물게 실패합니다) |

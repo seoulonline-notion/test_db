@@ -4,6 +4,8 @@
 
 /* ---------- 로그인 ---------- */
 .admin-login { max-width: 440px; padding-top: 40px; }
+.bootstrap summary { cursor: pointer; font-weight: 700; color: var(--text-sub); }
+.bootstrap[open] summary { color: var(--text); margin-bottom: 4px; }
 
 /* 흰 카드 상자 */
 .card-box {
