@@ -521,18 +521,95 @@ begin
     return true;
   end if;
 
-  -- admins 표의 이메일 중 실제 로그인 계정(auth.users)이 있는 사람이 있으면 닫힘
-  if exists (
-    select 1
-    from public.admins a
-    join auth.users u on lower(u.email) = lower(a.email)
-  ) then
+  -- admins 표의 이메일 중 "이메일 확인까지 끝난" 로그인 계정이 있으면 닫힘
+  if public.has_active_admin() then
     return false;
   end if;
 
   insert into public.admins (email) values (v_email)
   on conflict (email) do nothing;
   return true;
+end;
+$$;
+
+
+-- 4-4. 활성 관리자(로그인 가능한 관리자)가 한 명이라도 있는가?
+create or replace function public.has_active_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.admins a
+    join auth.users u on lower(u.email) = lower(a.email)
+    where u.email_confirmed_at is not null
+  );
+$$;
+
+
+-- 4-5. 첫 관리자 만들기 2단계: 회원가입 직후 호출 (로그인 전이라 anon 으로 호출됨)
+--   Supabase 의 "Confirm email" 설정이 켜져 있으면 가입 후 메일 확인 전까지 로그인이 안 됩니다.
+--   이 함수가 그 이메일을 "확인됨"으로 바꾸고 관리자로 등록해, 바로 로그인할 수 있게 합니다.
+--   활성 관리자가 이미 있으면 아무것도 하지 않으므로, 처음 설정이 끝난 뒤에는 닫힙니다.
+create or replace function public.bootstrap_admin_confirm(p_email text)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text := lower(trim(coalesce(p_email, '')));
+begin
+  if v_email = '' then
+    return false;
+  end if;
+
+  if public.has_active_admin() then
+    return false;   -- 이미 관리자가 있음 → 닫힘
+  end if;
+
+  if not exists (select 1 from auth.users u where lower(u.email) = v_email) then
+    return false;   -- 회원가입이 안 된 이메일
+  end if;
+
+  update auth.users
+     set email_confirmed_at = coalesce(email_confirmed_at, now())
+   where lower(email) = v_email;
+
+  insert into public.admins (email) values (v_email)
+  on conflict (email) do nothing;
+  return true;
+end;
+$$;
+
+
+-- 4-6. 관리자가 새 교사 계정의 이메일 확인을 대신 처리 (교사 계정 → 교사 추가 에서 호출)
+--   admins 표에 등록된 이메일만 확인 처리할 수 있습니다.
+create or replace function public.confirm_admin_email(p_email text)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text := lower(trim(coalesce(p_email, '')));
+begin
+  if not public.is_admin() then
+    raise exception '관리자만 사용할 수 있습니다.';
+  end if;
+
+  if not exists (select 1 from public.admins a where lower(a.email) = v_email) then
+    return false;
+  end if;
+
+  update auth.users
+     set email_confirmed_at = coalesce(email_confirmed_at, now())
+   where lower(email) = v_email;
+
+  return found;
 end;
 $$;
 
@@ -551,8 +628,13 @@ revoke execute on function public.delete_my_comment(uuid)                  from 
 revoke execute on function public.admin_results()                          from public, anon;
 revoke execute on function public.admin_summary()                          from public, anon;
 revoke execute on function public.bootstrap_admin()                        from public, anon;
+revoke execute on function public.confirm_admin_email(text)                from public, anon;
 
 grant execute on function public.bootstrap_admin()                        to authenticated;
+grant execute on function public.confirm_admin_email(text)                to authenticated;
+-- 첫 관리자 만들기는 로그인 전에 호출되므로 anon 에게도 허용 (활성 관리자가 생기면 함수 스스로 닫힘)
+grant execute on function public.bootstrap_admin_confirm(text)            to anon, authenticated;
+grant execute on function public.has_active_admin()                       to anon, authenticated;
 grant execute on function public.claim_student(text, text, text, boolean) to authenticated;
 grant execute on function public.toggle_like(uuid)                        to authenticated;
 grant execute on function public.add_comment(uuid, text)                  to authenticated;

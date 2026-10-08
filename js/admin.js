@@ -214,7 +214,7 @@
 
     if (error) {
       if (/invalid/i.test(error.message)) errEl.textContent = '이메일 또는 비밀번호가 올바르지 않습니다.';
-      else if (/not confirmed/i.test(error.message)) errEl.textContent = '이메일 확인이 끝나지 않은 계정입니다. 받은 확인 메일의 링크를 눌러 주세요.';
+      else if (/not confirmed/i.test(error.message)) errEl.textContent = '아직 활성화되지 않은 계정입니다. 다른 관리자에게 "교사 계정 → 교사 추가"로 등록을 요청하세요.';
       else errEl.textContent = error.message;
       return;
     }
@@ -257,14 +257,18 @@
       }
 
       if (!data.session) {
-        // Confirm email 이 켜진 프로젝트: 메일 확인 후 로그인하면 enterAdmin 에서 자동으로 bootstrap 됩니다.
-        errEl.textContent = '';
-        toast('확인 메일을 보냈습니다. 메일의 링크를 누른 뒤 위 로그인 칸으로 로그인하면 관리자로 등록됩니다.');
-        $('email').value = email;
-        return;
+        // Confirm email 이 켜진 프로젝트: 세션이 없으므로 DB 함수로 이메일 확인 + 관리자 등록을 대신 처리
+        const { data: ok, error: bErr } = await sb.rpc('bootstrap_admin_confirm', { p_email: email });
+        if (bErr) throw bErr;
+        if (!ok) throw new Error('이미 관리자가 있어 이 메뉴로는 등록할 수 없습니다. 기존 관리자에게 "교사 계정 → 교사 추가"를 요청하세요.');
+
+        // 확인 처리가 끝났으니 방금 정한 비밀번호로 로그인
+        const r = await sb.auth.signInWithPassword({ email, password });
+        if (r.error) throw new Error('계정은 만들어졌지만 로그인에 실패했습니다: ' + r.error.message);
+        data = r.data;
       }
 
-      // 2) 세션이 있으면 바로 관리자 등록 시도 (enterAdmin 안에서 bootstrap_admin 호출)
+      // 2) 세션이 있으면 관리자 등록 확인 (enterAdmin 안에서 필요 시 bootstrap_admin 호출)
       $('bootPassword').value = '';
       await enterAdmin(data.session.user);
       if (state.user) toast('첫 관리자 계정이 만들어졌습니다. 환영합니다!');
@@ -407,14 +411,18 @@
         } else if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
           // Confirm email 이 켜진 프로젝트는 중복 가입 시 빈 identities 를 돌려줍니다.
           note = ' (이미 있는 계정이라 등록만 했습니다)';
-        } else if (data.user && !data.session) {
-          note = ' · 확인 메일의 링크를 눌러야 로그인할 수 있습니다.';
         }
       }
 
       // (2) admins 표에 이메일 등록 (RLS: 관리자만 가능)
       const { error: insErr } = await sb.from('admins').upsert({ email }, { onConflict: 'email' });
       if (insErr) throw insErr;
+
+      // (3) Confirm email 설정이 켜져 있어도 바로 로그인할 수 있도록 이메일 확인을 대신 처리
+      if (password) {
+        const { error: cErr } = await sb.rpc('confirm_admin_email', { p_email: email });
+        if (cErr) note += ' (계정 활성화 실패: ' + cErr.message + ')';
+      }
 
       toast(`${email} 을(를) 관리자로 등록했습니다.${note}`);
       $('newAdminEmail').value = '';
@@ -431,6 +439,7 @@
   function mapSignUpError(msg) {
     if (/signups? not allowed|disabled/i.test(msg)) return 'Supabase 에서 새 회원가입이 꺼져 있습니다. Authentication → Sign In / Providers → "Allow new users to sign up" 을 켜 주세요.';
     if (/password/i.test(msg)) return '비밀번호가 Supabase 의 규칙(최소 길이 등)에 맞지 않습니다: ' + msg;
+    if (/email rate limit/i.test(msg)) return 'Supabase 가입 요청 한도에 걸렸습니다. 1시간 뒤 다시 시도하거나, Supabase → Authentication → Sign In / Providers → Email → "Confirm email" 을 끄면 한도 없이 바로 만들어집니다.';
     if (/rate limit|too many/i.test(msg)) return '요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요.';
     return msg;
   }
