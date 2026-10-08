@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>관리자 - 캐릭터 공모전 투표</title>
+  <meta name="robots" content="noindex" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/admin.css" />
+</head>
+<body>
+
+  <!-- ===================== 상단 헤더 ===================== -->
+  <header class="header">
+    <div class="header__inner">
+      <h1 class="header__title">🛠 관리자 페이지</h1>
+      <div class="header__right">
+        <a class="btn btn--ghost btn--small" href="index.html" target="_blank">학생 화면 열기 ↗</a>
+        <div class="user-chip hidden" id="adminChip">
+          <strong id="adminEmail"></strong>
+          <button class="btn btn--ghost btn--small" id="logoutBtn">로그아웃</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="alert hidden" id="fatalAlert"></div>
+
+  <!-- ===================== 로그인 화면 ===================== -->
+  <main class="container admin-login hidden" id="loginView">
+    <form class="login card-box" id="loginForm" novalidate>
+      <h2 class="login__title">교사 로그인</h2>
+      <p class="login__sub">Supabase 에 등록된 교사 이메일 계정으로 로그인합니다.</p>
+      <div class="field">
+        <label for="email">이메일</label>
+        <input id="email" type="email" autocomplete="username" required />
+      </div>
+      <div class="field">
+        <label for="password">비밀번호</label>
+        <input id="password" type="password" autocomplete="current-password" required />
+      </div>
+      <p class="form-error" id="loginError" role="alert"></p>
+      <button type="submit" class="btn btn--primary btn--block" id="loginSubmit">로그인</button>
+    </form>
+  </main>
+
+  <!-- ===================== 관리 화면 ===================== -->
+  <main class="container hidden" id="adminView">
+
+    <!-- 메뉴 탭 -->
+    <nav class="admin-nav" aria-label="관리 메뉴">
+      <button class="admin-nav__item is-active" data-view="dashboard">대시보드</button>
+      <button class="admin-nav__item" data-view="artworks">작품</button>
+      <button class="admin-nav__item" data-view="roster">참가 명단</button>
+      <button class="admin-nav__item" data-view="comments">댓글</button>
+      <button class="admin-nav__item" data-view="results">결과</button>
+    </nav>
+
+    <!-- ---------- 대시보드 ---------- -->
+    <section class="admin-section" id="view-dashboard">
+
+      <!-- 투표 스위치 -->
+      <div class="card-box">
+        <div class="switch-row">
+          <div>
+            <h2 class="section-title">투표 상태</h2>
+            <p class="section-sub" id="votingStateText">불러오는 중…</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="votingSwitch" />
+            <span class="switch__track"></span>
+          </label>
+        </div>
+        <p class="hint">스위치를 끄면 학생들은 작품은 볼 수 있지만 하트·댓글을 남길 수 없습니다.</p>
+      </div>
+
+      <!-- 현황 숫자 -->
+      <div class="stats" id="stats">
+        <div class="stat"><span class="stat__num" id="statArtworks">-</span><span class="stat__label">작품</span></div>
+        <div class="stat"><span class="stat__num" id="statRoster">-</span><span class="stat__label">명단 인원</span></div>
+        <div class="stat"><span class="stat__num" id="statLogins">-</span><span class="stat__label">로그인 학생</span></div>
+        <div class="stat"><span class="stat__num" id="statLikes">-</span><span class="stat__label">하트</span></div>
+        <div class="stat"><span class="stat__num" id="statComments">-</span><span class="stat__label">댓글</span></div>
+      </div>
+
+      <!-- 사이트 제목 / 안내문 -->
+      <form class="card-box" id="settingsForm">
+        <h2 class="section-title">사이트 제목·안내문</h2>
+        <div class="field">
+          <label for="siteTitleInput">제목 (학생 화면 상단)</label>
+          <input id="siteTitleInput" type="text" maxlength="60" />
+        </div>
+        <div class="field">
+          <label for="noticeInput">안내문 (비워 두면 표시 안 함)</label>
+          <textarea id="noticeInput" rows="3" maxlength="300" placeholder="예: 투표 기간은 10월 8일~12일입니다."></textarea>
+        </div>
+        <button type="submit" class="btn btn--primary">저장</button>
+      </form>
+    </section>
+
+    <!-- ---------- 작품 ---------- -->
+    <section class="admin-section hidden" id="view-artworks">
+
+      <!-- 업로드 -->
+      <div class="card-box">
+        <h2 class="section-title">작품 업로드</h2>
+        <p class="section-sub">이미지를 여러 장 한 번에 고르면 작품마다 제목·설명을 입력하는 칸이 생깁니다. (JPG/PNG/WebP/GIF, 10MB 이하)</p>
+        <label class="file-drop" id="fileDrop">
+          <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp,image/gif" multiple class="sr-only" />
+          <span>📁 이미지 파일 선택 (여러 장 가능)</span>
+        </label>
+
+        <!-- 선택한 파일마다 입력 칸이 생김 -->
+        <div class="upload-queue" id="uploadQueue"></div>
+
+        <div class="upload-actions hidden" id="uploadActions">
+          <span class="hint" id="uploadProgress"></span>
+          <button type="button" class="btn btn--primary" id="uploadBtn">전부 업로드</button>
+        </div>
+      </div>
+
+      <!-- 작품 목록 -->
+      <div class="card-box">
+        <div class="section-head">
+          <h2 class="section-title">작품 목록 <span class="count" id="artworkListCount"></span></h2>
+          <button class="btn btn--small" id="reloadArtworks">새로고침</button>
+        </div>
+        <div class="artwork-list" id="artworkList"><div class="state">불러오는 중…</div></div>
+      </div>
+    </section>
+
+    <!-- ---------- 참가 명단 ---------- -->
+    <section class="admin-section hidden" id="view-roster">
+      <div class="card-box">
+        <h2 class="section-title">명단 CSV 업로드</h2>
+        <p class="section-sub">
+          엑셀에서 <b>학교, 학번, 이름</b> 세 열로 만든 뒤 "CSV UTF-8" 로 저장하세요. 첫 줄이 제목 행이면 자동으로 건너뜁니다.<br/>
+          같은 (학교, 학번)이 이미 있으면 이름을 덮어씁니다.
+        </p>
+        <div class="row-actions">
+          <label class="btn">
+            <input type="file" id="rosterFile" accept=".csv,text/csv" class="sr-only" />
+            📄 CSV 파일 선택
+          </label>
+          <button class="btn btn--ghost btn--small" id="downloadTemplate">예시 CSV 내려받기</button>
+        </div>
+
+        <!-- 미리보기 -->
+        <div class="hidden" id="rosterPreviewWrap">
+          <p class="hint" id="rosterPreviewInfo"></p>
+          <div class="table-wrap">
+            <table class="table" id="rosterPreviewTable"></table>
+          </div>
+          <div class="row-actions">
+            <button class="btn btn--primary" id="rosterUploadBtn">이대로 등록</button>
+            <button class="btn btn--ghost" id="rosterCancelBtn">취소</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card-box">
+        <div class="section-head">
+          <h2 class="section-title">등록된 명단 <span class="count" id="rosterCount"></span></h2>
+          <div class="row-actions">
+            <input type="search" id="rosterSearch" placeholder="이름/학번 검색" class="search" />
+            <button class="btn btn--small btn--danger" id="rosterClearBtn">전체 삭제</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="rosterTable"></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- 댓글 ---------- -->
+    <section class="admin-section hidden" id="view-comments">
+      <div class="card-box">
+        <div class="section-head">
+          <h2 class="section-title">댓글 관리 <span class="count" id="commentCount"></span></h2>
+          <div class="row-actions">
+            <label class="check-inline"><input type="checkbox" id="showHiddenOnly" /> 숨긴 댓글만</label>
+            <button class="btn btn--small" id="reloadComments">새로고침</button>
+          </div>
+        </div>
+        <p class="hint">학생 화면에는 마스킹된 이름만 보이지만, 여기서는 실제 이름·학번이 보입니다.</p>
+        <div class="table-wrap">
+          <table class="table" id="commentTable"></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- 결과 ---------- -->
+    <section class="admin-section hidden" id="view-results">
+      <div class="card-box">
+        <div class="section-head">
+          <h2 class="section-title">투표 결과</h2>
+          <div class="row-actions">
+            <button class="btn btn--small" id="reloadResults">새로고침</button>
+            <button class="btn btn--small btn--primary" id="downloadResults">결과 CSV</button>
+            <button class="btn btn--small" id="downloadLikesDetail">하트 상세 CSV</button>
+            <button class="btn btn--small" id="downloadCommentsDetail">댓글 상세 CSV</button>
+          </div>
+        </div>
+        <p class="hint">결과 CSV: 작품별 하트·댓글 수. 상세 CSV: 누가 어떤 작품에 하트/댓글을 남겼는지(검증용, 외부 공유 금지).</p>
+        <div class="table-wrap">
+          <table class="table" id="resultsTable"></table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/config.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>
