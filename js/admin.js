@@ -146,6 +146,7 @@
     user: null,
     settings: null,
     uploadQueue: [],      // [{ file, previewUrl, status }]
+    artworkInfo: [],      // 작품 정보 CSV [{ title, author, description, keyword }]
     roster: [],           // 등록된 명단 (검색용 캐시)
     rosterParsed: null,   // CSV 미리보기 데이터
     loaded: {},           // 각 탭을 한 번 불러왔는지
@@ -204,9 +205,9 @@
     btn.disabled = false; btn.textContent = '로그인';
 
     if (error) {
-      errEl.textContent = /invalid/i.test(error.message)
-        ? '이메일 또는 비밀번호가 올바르지 않습니다.'
-        : error.message;
+      if (/invalid/i.test(error.message)) errEl.textContent = '이메일 또는 비밀번호가 올바르지 않습니다.';
+      else if (/not confirmed/i.test(error.message)) errEl.textContent = '이메일 확인이 끝나지 않은 계정입니다. 받은 확인 메일의 링크를 눌러 주세요.';
+      else errEl.textContent = error.message;
       return;
     }
     $('password').value = '';
@@ -224,7 +225,7 @@
   // 3. 탭 전환 (처음 열 때만 데이터 로드, 새로고침 버튼으로 다시 로드)
   // -------------------------------------------------------------------
   const loaders = {
-    dashboard: async () => { await Promise.all([loadSettings(), loadSummary()]); },
+    dashboard: async () => { await Promise.all([loadSettings(), loadSummary(), loadAdmins()]); },
     artworks: loadArtworks,
     roster: loadRoster,
     comments: loadComments,
@@ -297,21 +298,157 @@
   }
 
   // -------------------------------------------------------------------
+  // 4-1. 교사 계정 관리
+  // -------------------------------------------------------------------
+  //  anon key 로는 Supabase 의 "관리자 API"(사용자 강제 생성)를 쓸 수 없으므로,
+  //  일반 회원가입(signUp)으로 계정을 만든 뒤 admins 표에 이메일을 등록하는 방식입니다.
+  //  회원가입은 별도의 클라이언트(세션 저장 안 함)로 호출해서,
+  //  지금 로그인한 교사의 세션이 새 계정으로 바뀌지 않게 합니다.
+  // -------------------------------------------------------------------
+  async function loadAdmins() {
+    const { data, error } = await sb.from('admins').select('*').order('created_at');
+    const table = $('adminTable');
+    if (error) { table.innerHTML = `<tr><td class="empty">${escapeHtml(error.message)}</td></tr>`; return; }
+    $('adminCount').textContent = `(${data.length})`;
+    const me = (state.user?.email || '').toLowerCase();
+    table.innerHTML =
+      '<thead><tr><th>이메일</th><th>등록일</th><th></th></tr></thead><tbody>' +
+      data.map((a) => {
+        const isMe = a.email.toLowerCase() === me;
+        return `
+          <tr data-email="${escapeHtml(a.email)}">
+            <td>${escapeHtml(a.email)}${isMe ? ' <span class="tag">나</span>' : ''}</td>
+            <td>${formatDate(a.created_at)}</td>
+            <td class="actions">${isMe ? '' : '<button class="btn btn--small btn--danger" data-action="remove-admin">권한 해제</button>'}</td>
+          </tr>`;
+      }).join('') + '</tbody>';
+  }
+
+  async function onAddAdmin(e) {
+    e.preventDefault();
+    const errEl = $('adminAddError');
+    errEl.textContent = '';
+    const email = $('newAdminEmail').value.trim().toLowerCase();
+    const password = $('newAdminPassword').value;
+
+    if (!email) { errEl.textContent = '이메일을 입력해 주세요.'; return; }
+    if (password && password.length < 8) { errEl.textContent = '비밀번호는 8자 이상으로 해 주세요.'; return; }
+
+    const btn = $('adminAddBtn');
+    btn.disabled = true; btn.textContent = '처리 중…';
+    let note = '';
+
+    try {
+      // (1) 비밀번호를 입력했으면 Supabase 로그인 계정 생성
+      if (password) {
+        const tmp = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {
+          auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+        });
+        const { data, error } = await tmp.auth.signUp({ email, password });
+        if (error) {
+          // 이미 있는 계정이면 등록만 진행
+          if (/already|registered|exists/i.test(error.message)) note = ' (이미 있는 계정이라 등록만 했습니다)';
+          else throw new Error(mapSignUpError(error.message));
+        } else if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+          // Confirm email 이 켜진 프로젝트는 중복 가입 시 빈 identities 를 돌려줍니다.
+          note = ' (이미 있는 계정이라 등록만 했습니다)';
+        } else if (data.user && !data.session) {
+          note = ' · 확인 메일의 링크를 눌러야 로그인할 수 있습니다.';
+        }
+      }
+
+      // (2) admins 표에 이메일 등록 (RLS: 관리자만 가능)
+      const { error: insErr } = await sb.from('admins').upsert({ email }, { onConflict: 'email' });
+      if (insErr) throw insErr;
+
+      toast(`${email} 을(를) 관리자로 등록했습니다.${note}`);
+      $('newAdminEmail').value = '';
+      $('newAdminPassword').value = '';
+      await loadAdmins();
+    } catch (err) {
+      console.error('교사 추가 실패', err);
+      errEl.textContent = err.message || '추가에 실패했습니다.';
+    } finally {
+      btn.disabled = false; btn.textContent = '계정 만들고 등록';
+    }
+  }
+
+  function mapSignUpError(msg) {
+    if (/signups? not allowed|disabled/i.test(msg)) return 'Supabase 에서 새 회원가입이 꺼져 있습니다. Authentication → Sign In / Providers → "Allow new users to sign up" 을 켜 주세요.';
+    if (/password/i.test(msg)) return '비밀번호가 Supabase 의 규칙(최소 길이 등)에 맞지 않습니다: ' + msg;
+    if (/rate limit|too many/i.test(msg)) return '요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요.';
+    return msg;
+  }
+
+  async function removeAdmin(email) {
+    if (!confirm(`${email} 의 관리자 권한을 해제할까요?\n(Supabase 로그인 계정 자체는 남아 있으며, 대시보드 Users 에서 따로 삭제할 수 있습니다)`)) return;
+    const { error } = await sb.from('admins').delete().eq('email', email);
+    if (error) { toast(error.message, true); return; }
+    toast('권한을 해제했습니다.');
+    await loadAdmins();
+  }
+
+  // -------------------------------------------------------------------
   // 5. 작품 업로드
   // -------------------------------------------------------------------
   function onFilesSelected(files) {
     const list = Array.from(files || []).filter((f) => f.type.startsWith('image/'));
     if (!list.length) return;
+    syncQueueInputs();           // 이미 입력해 둔 값이 사라지지 않도록 먼저 저장
     list.forEach((file) => {
-      state.uploadQueue.push({
+      const item = {
         file,
         previewUrl: URL.createObjectURL(file),
         status: 'ready',   // ready | uploading | done | error
         error: '',
-      });
+        infoIndex: -1,     // 작품 정보 CSV 에서 고른 행 번호 (-1: 없음)
+      };
+      // 파일명에 CSV 의 "파일명키워드"가 들어 있으면 자동으로 짝지음 (예: 서라_대표시안.jpg ↔ 서라)
+      const idx = state.artworkInfo.findIndex((info) => info.keyword && file.name.includes(info.keyword));
+      if (idx >= 0) applyArtworkInfo(item, idx);
+      state.uploadQueue.push(item);
     });
     renderUploadQueue();
     $('fileInput').value = '';   // 같은 파일을 다시 골라도 change 가 발생하도록 초기화
+  }
+
+  /** 작품 정보 CSV 읽기 (제목, 출품자, 설명, 파일명키워드) */
+  async function onArtworkInfoFile(file) {
+    if (!file) return;
+    const rows = parseCsv(await readTextSmart(file));
+    if (rows.length && /제목|title/i.test(rows[0][0] || '')) rows.shift(); // 제목 행 제거
+    state.artworkInfo = rows
+      .map((r) => ({
+        title: (r[0] || '').trim(),
+        author: (r[1] || '').trim(),
+        description: (r[2] || '').trim(),
+        keyword: (r[3] || '').trim(),
+      }))
+      .filter((info) => info.title);
+    $('artworkInfoFile').value = '';
+    if (!state.artworkInfo.length) { toast('CSV 에서 작품 정보를 찾지 못했습니다.', true); return; }
+    $('artworkInfoStatus').textContent = `작품 정보 ${state.artworkInfo.length}개 불러옴: ` +
+      state.artworkInfo.map((i) => i.title).join(', ');
+    toast(`작품 정보 ${state.artworkInfo.length}개를 불러왔습니다.`);
+
+    // 이미 고른 이미지가 있으면 키워드로 다시 짝지어 봄
+    syncQueueInputs();
+    state.uploadQueue.forEach((item) => {
+      if (item.infoIndex >= 0) return;
+      const idx = state.artworkInfo.findIndex((info) => info.keyword && item.file.name.includes(info.keyword));
+      if (idx >= 0) applyArtworkInfo(item, idx);
+    });
+    renderUploadQueue();
+  }
+
+  /** 대기열 항목에 CSV 의 작품 정보를 채워 넣음 */
+  function applyArtworkInfo(item, idx) {
+    const info = state.artworkInfo[idx];
+    item.infoIndex = idx;
+    if (!info) return;
+    item.title = info.title;
+    item.author = info.author;
+    item.description = info.description;
   }
 
   function renderUploadQueue() {
@@ -323,13 +460,22 @@
       const defaultTitle = item.file.name.replace(/\.[^.]+$/, ''); // 확장자 뺀 파일명
       const sizeMb = (item.file.size / 1024 / 1024).toFixed(1);
       const statusText = { ready: '대기', uploading: '업로드 중…', done: '완료 ✓', error: '실패: ' + item.error }[item.status];
+      // 작품 정보 CSV 를 불러온 경우에만 드롭다운 표시
+      const infoSelect = state.artworkInfo.length ? `
+            <select data-field="info">
+              <option value="-1">📋 작품 정보에서 고르기…</option>
+              ${state.artworkInfo.map((info, k) =>
+                `<option value="${k}" ${item.infoIndex === k ? 'selected' : ''}>${escapeHtml(info.title)}${info.author ? ' · ' + escapeHtml(info.author) : ''}</option>`
+              ).join('')}
+            </select>` : '';
       return `
         <div class="upload-item ${item.status === 'done' ? 'is-done' : ''} ${item.status === 'error' ? 'is-error' : ''}" data-index="${i}">
           <img src="${item.previewUrl}" alt="" />
           <div class="upload-item__fields">
+            ${infoSelect}
             <input type="text" data-field="title" placeholder="제목 (필수)" value="${escapeHtml(item.title ?? defaultTitle)}" maxlength="80" />
             <input type="text" data-field="author" placeholder="출품자 (선택, 예: 2학년 3반 홍길동)" value="${escapeHtml(item.author ?? '')}" maxlength="60" />
-            <textarea data-field="description" rows="2" placeholder="작품 설명 (선택)" maxlength="1000">${escapeHtml(item.description ?? '')}</textarea>
+            <textarea data-field="description" rows="2" placeholder="작품 설명 (선택)" maxlength="3000">${escapeHtml(item.description ?? '')}</textarea>
             <div class="upload-item__meta">
               <span>${escapeHtml(item.file.name)} · ${sizeMb}MB · ${statusText}</span>
               ${item.status === 'uploading' ? '' : '<button type="button" class="btn btn--ghost btn--small" data-action="remove">빼기</button>'}
@@ -738,6 +884,14 @@
     $('votingSwitch').addEventListener('change', onToggleVoting);
     $('settingsForm').addEventListener('submit', onSaveSettings);
 
+    // 교사 계정
+    $('adminAddForm').addEventListener('submit', onAddAdmin);
+    $('reloadAdmins').addEventListener('click', loadAdmins);
+    $('adminTable').addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-action="remove-admin"]');
+      if (btn) removeAdmin(btn.closest('tr').dataset.email);
+    });
+
     // 작품 업로드: 파일 선택 + 드래그 앤 드롭
     $('fileInput').addEventListener('change', (e) => onFilesSelected(e.target.files));
     const drop = $('fileDrop');
@@ -752,6 +906,16 @@
       const idx = Number(btn.closest('.upload-item').dataset.index);
       URL.revokeObjectURL(state.uploadQueue[idx].previewUrl);
       state.uploadQueue.splice(idx, 1);
+      renderUploadQueue();
+    });
+    // 작품 정보 CSV 불러오기 + 드롭다운에서 고르면 칸 채우기
+    $('artworkInfoFile').addEventListener('change', (e) => onArtworkInfoFile(e.target.files[0]));
+    $('uploadQueue').addEventListener('change', (e) => {
+      const sel = e.target.closest('select[data-field="info"]');
+      if (!sel) return;
+      syncQueueInputs();
+      const item = state.uploadQueue[Number(sel.closest('.upload-item').dataset.index)];
+      applyArtworkInfo(item, Number(sel.value));
       renderUploadQueue();
     });
     $('uploadBtn').addEventListener('click', uploadAll);

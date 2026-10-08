@@ -60,9 +60,9 @@ Supabase 는 기본적으로 **같은 IP 에서 1시간에 익명 로그인 30�
 ### 1-4. schema.sql 실행하기
 
 1. 이 프로젝트의 `supabase/schema.sql` 을 메모장이나 VS Code 로 엽니다.
-2. 파일 **맨 아래**에서 아래 줄을 찾아 `teacher@example.com` 을 **1-3 에서 만든 교사 이메일**로 바꾸고 저장합니다.
+2. 파일 **맨 아래**에서 아래 줄을 찾아 이메일이 **1-3 에서 만든 교사 이메일**과 같은지 확인합니다. (기본값: `admin@seoulonline.sen.hs.kr`)
    ```sql
-   insert into public.admins (email) values ('teacher@example.com')
+   insert into public.admins (email) values ('admin@seoulonline.sen.hs.kr')
    ```
 3. 파일 내용 **전체를 복사**합니다 (Ctrl+A → Ctrl+C).
 4. Supabase 대시보드 → 왼쪽 메뉴 **SQL Editor** → **New query**
@@ -72,11 +72,10 @@ Supabase 는 기본적으로 **같은 IP 에서 1시간에 익명 로그인 30�
 이 한 번의 실행으로 테이블 7개, 보안 정책(RLS), 함수, 이미지 저장소(Storage 버킷 `artworks`)가 모두 만들어집니다.
 **여러 번 실행해도 안전**하게 작성되어 있으니, 나중에 교사를 추가하고 싶으면 맨 아래 insert 문만 고쳐서 다시 실행해도 됩니다.
 
-> 교사를 한 명 더 추가하려면 SQL Editor 에서 이렇게 실행하세요:
-> ```sql
-> insert into public.admins (email) values ('another.teacher@school.kr') on conflict do nothing;
-> ```
-> (그 이메일로 1-3 처럼 Users 에 계정도 만들어야 합니다.)
+> 교사를 더 추가할 때는 SQL 이 필요 없습니다. 첫 교사가 `admin.html` 에 로그인한 뒤
+> **대시보드 → 교사 계정 → 교사 추가**에서 이메일과 비밀번호를 넣으면 계정 생성과 관리자 등록이 한 번에 됩니다.
+> Supabase 의 **Confirm email** 설정이 켜져 있으면 새 교사는 확인 메일의 링크를 눌러야 로그인할 수 있습니다.
+> (Authentication → Sign In / Providers → Email → Confirm email 을 끄면 바로 로그인 가능)
 
 ### 1-5. URL 과 key 를 config.js 에 넣기
 
@@ -129,6 +128,7 @@ python -m http.server 8765
    - 열 순서: `학교, 학번, 이름`. 첫 줄 제목은 자동으로 건너뜁니다.
    - 학번은 `10203` 처럼 학년·반·번호를 붙인 형태를 추천합니다 (학교 안에서 겹치지만 않으면 됩니다).
 3. **작품** 탭 → 이미지 여러 장 선택 → 제목·설명 입력 → **전부 업로드**
+   - 제목·출품자·설명을 미리 적은 `작품정보.csv`(열: 제목, 출품자, 설명, 파일명키워드)가 있으면 **📋 작품 정보 CSV 불러오기**로 읽어 두세요. 이미지 파일명에 키워드(예: `서라`)가 들어 있으면 자동으로 채워지고, 아니면 작품마다 드롭다운에서 고르면 됩니다.
 4. **대시보드** 탭 → **투표 상태** 스위치 켜기
 
 **학생 화면** (`http://localhost:8765/index.html`)

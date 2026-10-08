@@ -91,9 +91,10 @@
 }
 .upload-item img { width: 90px; height: 90px; object-fit: cover; border-radius: 8px; background: var(--bg-soft); }
 .upload-item__fields { display: flex; flex-direction: column; gap: 6px; }
-.upload-item__fields input, .upload-item__fields textarea {
-  width: 100%; padding: 8px 10px; border: 1.5px solid var(--line); border-radius: 8px; font-size: 0.92rem; outline: none;
+.upload-item__fields input, .upload-item__fields textarea, .upload-item__fields select {
+  width: 100%; padding: 8px 10px; border: 1.5px solid var(--line); border-radius: 8px; font-size: 0.92rem; outline: none; background: #fff;
 }
+.upload-item__fields select { border-color: var(--accent-soft); background: var(--accent-soft); font-weight: 700; }
 .upload-item__fields input:focus, .upload-item__fields textarea:focus { border-color: var(--accent); }
 .upload-item__meta { display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem; color: var(--text-sub); }
 .upload-item.is-done { opacity: 0.55; }

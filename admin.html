@@ -96,6 +96,40 @@
         </div>
         <button type="submit" class="btn btn--primary">저장</button>
       </form>
+
+      <!-- 교사 계정 관리 -->
+      <div class="card-box">
+        <div class="section-head">
+          <h2 class="section-title">교사 계정 <span class="count" id="adminCount"></span></h2>
+          <button class="btn btn--small" id="reloadAdmins">새로고침</button>
+        </div>
+        <p class="section-sub">여기에 등록된 이메일만 이 관리자 페이지에 로그인할 수 있습니다.</p>
+        <div class="table-wrap">
+          <table class="table" id="adminTable"></table>
+        </div>
+
+        <form id="adminAddForm" class="admin-add">
+          <h3 class="section-title" style="font-size:0.95rem;margin-top:16px">교사 추가</h3>
+          <div class="field">
+            <label for="newAdminEmail">이메일</label>
+            <input id="newAdminEmail" type="email" autocomplete="off" placeholder="teacher@school.kr" required />
+          </div>
+          <div class="field">
+            <label for="newAdminPassword">비밀번호 (새 계정을 만들 때만, 8자 이상)</label>
+            <input id="newAdminPassword" type="password" autocomplete="new-password" minlength="8"
+                   placeholder="이미 Supabase 계정이 있는 교사라면 비워 두세요" />
+          </div>
+          <p class="form-error" id="adminAddError" role="alert"></p>
+          <div class="row-actions">
+            <button type="submit" class="btn btn--primary" id="adminAddBtn">계정 만들고 등록</button>
+          </div>
+          <p class="hint">
+            비밀번호를 입력하면 Supabase 로그인 계정을 새로 만든 뒤 관리자로 등록합니다.<br/>
+            Supabase 의 <b>Confirm email</b> 설정이 켜져 있으면, 새 교사는 받은 확인 메일의 링크를 눌러야 로그인할 수 있습니다.
+            (Authentication → Sign In / Providers → Email → Confirm email 을 끄면 바로 로그인 가능)
+          </p>
+        </form>
+      </div>
     </section>
 
     <!-- ---------- 작품 ---------- -->
@@ -109,6 +143,17 @@
           <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp,image/gif" multiple class="sr-only" />
           <span>📁 이미지 파일 선택 (여러 장 가능)</span>
         </label>
+
+        <!-- 작품 정보 CSV: 제목·출품자·설명을 미리 적어 두면 입력칸이 자동으로 채워짐 -->
+        <div class="row-actions">
+          <label class="btn btn--small">
+            <input type="file" id="artworkInfoFile" accept=".csv,text/csv" class="sr-only" />
+            📋 작품 정보 CSV 불러오기
+          </label>
+          <span class="hint" id="artworkInfoStatus">
+            열 순서: <b>제목, 출품자, 설명, 파일명키워드</b>. 이미지 파일명에 키워드가 들어 있으면 자동으로 짝지어지고, 아니면 작품마다 드롭다운에서 고르면 됩니다.
+          </span>
+        </div>
 
         <!-- 선택한 파일마다 입력 칸이 생김 -->
         <div class="upload-queue" id="uploadQueue"></div>

@@ -546,9 +546,15 @@ create policy "settings_read_all"    on public.settings for select using (true);
 create policy "settings_admin_write" on public.settings for update
   using (public.is_admin()) with check (public.is_admin());
 
--- 6-2. admins : 교사만 자기 목록 조회 (수정은 SQL Editor 에서만)
-drop policy if exists "admins_admin_read" on public.admins;
-create policy "admins_admin_read" on public.admins for select using (public.is_admin());
+-- 6-2. admins : 교사만 목록 조회·추가·삭제 (admin.html 의 "교사 계정" 메뉴에서 사용)
+--      자기 자신은 삭제할 수 없게 하여 관리자가 0명이 되는 사고를 막습니다.
+drop policy if exists "admins_admin_read"   on public.admins;
+drop policy if exists "admins_admin_insert" on public.admins;
+drop policy if exists "admins_admin_delete" on public.admins;
+create policy "admins_admin_read"   on public.admins for select using (public.is_admin());
+create policy "admins_admin_insert" on public.admins for insert with check (public.is_admin());
+create policy "admins_admin_delete" on public.admins for delete
+  using (public.is_admin() and lower(email) <> lower(coalesce(auth.jwt() ->> 'email', '')));
 
 -- 6-3. allowed_students : 교사만 모든 작업. ★ 학생에게는 어떤 정책도 없음 → 조회 불가
 drop policy if exists "roster_admin_all" on public.allowed_students;
@@ -637,14 +643,15 @@ create policy "artworks_bucket_admin_delete" on storage.objects for delete
 
 
 -- ---------------------------------------------------------------------
--- 8. ★ 교사 계정 이메일 등록  (반드시 본인 이메일로 수정!)
+-- 8. ★ 첫 번째 교사 계정 이메일 등록
 -- ---------------------------------------------------------------------
 --  1) Supabase 대시보드 → Authentication → Users → Add user 로
 --     교사 이메일 + 비밀번호 계정을 먼저 만듭니다. (Auto Confirm 체크)
---  2) 아래 이메일을 그 계정 이메일로 바꾼 뒤 실행합니다.
---  교사를 더 추가하려면 같은 insert 문을 한 줄 더 쓰면 됩니다.
+--  2) 아래 이메일이 그 계정 이메일과 같은지 확인한 뒤 실행합니다.
+--  첫 교사가 로그인한 뒤에는 admin.html → 대시보드 → "교사 계정" 에서
+--  다른 교사를 추가할 수 있으므로, 여기서는 1명만 등록하면 됩니다.
 -- ---------------------------------------------------------------------
-insert into public.admins (email) values ('teacher@example.com')
+insert into public.admins (email) values ('admin@seoulonline.sen.hs.kr')
 on conflict (email) do nothing;
 
 
