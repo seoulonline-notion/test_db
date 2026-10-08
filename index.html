@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>캐릭터 공모전 투표</title>
+  <meta name="description" content="학생들이 만든 캐릭터 작품을 보고 하트와 댓글로 투표하세요." />
+  <meta name="robots" content="noindex" /> <!-- 검색엔진 노출 방지 (교내용) -->
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+  <!-- ===================== 상단 헤더 ===================== -->
+  <header class="header">
+    <div class="header__inner">
+      <h1 class="header__title" id="siteTitle">캐릭터 공모전 투표</h1>
+      <div class="header__right">
+        <!-- 투표 상태 배지: JS가 "투표 중" / "마감" 으로 바꿔줌 -->
+        <span class="badge" id="voteBadge">불러오는 중…</span>
+
+        <!-- 로그인 전: 로그인 버튼 -->
+        <button class="btn btn--primary btn--small" id="loginBtn">로그인</button>
+
+        <!-- 로그인 후: 이름 + 로그아웃 (처음엔 숨김) -->
+        <div class="user-chip hidden" id="userChip">
+          <strong id="userName"></strong>
+          <button class="btn btn--ghost btn--small" id="logoutBtn">로그아웃</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- 설정 누락 등 심각한 오류 안내 (처음엔 숨김) -->
+  <div class="alert hidden" id="fatalAlert"></div>
+
+  <!-- 교사가 설정한 안내문 (내용이 없으면 자동으로 숨겨짐) -->
+  <div class="notice" id="notice"></div>
+
+  <!-- ===================== 본문 ===================== -->
+  <main class="container">
+
+    <!-- 정렬 탭 + 작품 수 -->
+    <div class="toolbar">
+      <div class="tabs" role="tablist" aria-label="정렬">
+        <button class="tab is-active" data-sort="random" role="tab">랜덤</button>
+        <button class="tab" data-sort="popular" role="tab">인기순</button>
+        <button class="tab" data-sort="newest" role="tab">최신순</button>
+      </div>
+      <span class="toolbar__count" id="artworkCount"></span>
+    </div>
+
+    <!-- 갤러리: JS가 카드들을 채워 넣음 -->
+    <section class="grid" id="gallery" aria-live="polite">
+      <!-- 로딩 중 스켈레톤 -->
+      <div class="skeleton"></div><div class="skeleton"></div>
+      <div class="skeleton"></div><div class="skeleton"></div>
+    </section>
+
+    <!-- 빈 목록 / 오류 상태 (JS가 토글) -->
+    <div class="state hidden" id="galleryState"></div>
+  </main>
+
+  <footer class="footer">
+    하트는 작품마다 1번씩 누를 수 있고, 다시 누르면 취소됩니다.<br />
+    댓글은 200자까지, 내 댓글만 지울 수 있어요.
+  </footer>
+
+  <!-- ===================== 로그인 모달 ===================== -->
+  <div class="modal hidden" id="loginModal" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+    <div class="modal__panel modal__panel--login">
+      <form class="login" id="loginForm" novalidate>
+        <button type="button" class="modal__close" data-close="loginModal" aria-label="닫기">✕</button>
+        <h2 class="login__title" id="loginTitle">투표 참여 로그인</h2>
+        <p class="login__sub">참가 명단에 등록된 학생만 참여할 수 있어요.</p>
+
+        <div class="field">
+          <label for="school">학교</label>
+          <select id="school" required>
+            <option value="">학교를 선택하세요</option>
+            <!-- JS가 list_schools() 결과로 채움 -->
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="studentNo">학번</label>
+          <input id="studentNo" type="text" inputmode="numeric" autocomplete="off"
+                 placeholder="예: 10203 (1학년 2반 3번)" required />
+        </div>
+
+        <div class="field">
+          <label for="studentName">이름</label>
+          <input id="studentName" type="text" autocomplete="off" placeholder="예: 홍길동" required />
+        </div>
+
+        <!-- 개인정보 수집·이용 동의 -->
+        <div class="consent">
+          <label>
+            <input type="checkbox" id="consent" />
+            <span>개인정보 수집·이용에 동의합니다. (필수)</span>
+          </label>
+          <details>
+            <summary>수집 항목·목적·보유 기간 보기</summary>
+            <ul>
+              <li><b>수집 항목</b>: 학교명, 학번, 이름</li>
+              <li><b>이용 목적</b>: 공모전 참가자 확인, 중복 투표 방지, 결과 집계</li>
+              <li><b>보유 기간</b>: 공모전 종료 후 결과 발표가 끝나면 지체 없이 파기</li>
+              <li>동의하지 않으면 투표에 참여할 수 없으며, 작품 감상은 가능합니다.</li>
+            </ul>
+          </details>
+        </div>
+
+        <p class="form-error" id="loginError" role="alert"></p>
+
+        <button type="submit" class="btn btn--primary btn--block" id="loginSubmit">참여하기</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===================== 작품 상세 모달 ===================== -->
+  <div class="modal hidden" id="detailModal" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+    <div class="modal__panel">
+      <div class="detail">
+        <button type="button" class="modal__close" data-close="detailModal" aria-label="닫기">✕</button>
+
+        <!-- 왼쪽(모바일은 위): 큰 이미지 -->
+        <div class="detail__image">
+          <img id="detailImage" src="" alt="" />
+        </div>
+
+        <!-- 오른쪽(모바일은 아래): 내용 + 하트 + 댓글 -->
+        <div class="detail__body">
+          <h2 class="detail__title" id="detailTitle"></h2>
+          <div class="detail__author" id="detailAuthor"></div>
+          <p class="detail__desc" id="detailDesc"></p>
+
+          <div class="detail__actions">
+            <button class="heart heart--big" id="detailHeart" type="button" aria-label="좋아요">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 21s-7.5-4.6-9.6-9.1C1 8.6 2.6 5 6.3 5c2 0 3.3 1.1 4.1 2.3L12 9l1.6-1.7C14.4 6.1 15.7 5 17.7 5c3.7 0 5.3 3.6 3.9 6.9C19.5 16.4 12 21 12 21z"/>
+              </svg>
+              <span id="detailLikeCount">0</span>
+            </button>
+            <span class="detail__hint" id="detailHint"></span>
+          </div>
+
+          <!-- 댓글 -->
+          <section class="comments">
+            <h3 class="comments__title">댓글 <span id="detailCommentCount">0</span></h3>
+            <ul class="comment-list" id="commentList">
+              <li class="state">댓글을 불러오는 중…</li>
+            </ul>
+
+            <form class="comment-form" id="commentForm">
+              <textarea id="commentBody" maxlength="200" rows="3"
+                        placeholder="작품에 대한 응원이나 감상을 남겨 주세요 (200자)"></textarea>
+              <div class="comment-form__foot">
+                <span class="char-count" id="charCount">0 / 200</span>
+                <button type="submit" class="btn btn--primary btn--small" id="commentSubmit">댓글 남기기</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 짧은 알림 메시지 -->
+  <div class="toast" id="toast" role="status"></div>
+
+  <!-- ===================== 스크립트 ===================== -->
+  <!-- 1) supabase-js v2 (CDN). 전역 변수 `supabase` 로 로드됨 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- 2) 연결 설정 (URL, anon key) -->
+  <script src="js/config.js"></script>
+  <!-- 3) 학생 화면 로직 -->
+  <script src="js/app.js"></script>
+</body>
+</html>
